@@ -59,16 +59,24 @@ bool PtpIpClient::readExact(uint8_t* buffer, size_t len, uint32_t timeoutMs) {
     unsigned long start = millis();
     while (totalRead < len) {
         if (millis() - start > timeoutMs) {
+            Serial.printf("[PTP/IP] readExact timeout! Read %d of %d bytes\n", (int)totalRead, (int)len);
             return false;
         }
         int available = m_client.available();
         if (available > 0) {
             size_t toRead = std::min((size_t)available, len - totalRead);
             int bytesRead = m_client.read(buffer + totalRead, toRead);
-            if (bytesRead <= 0) return false;
+            if (bytesRead <= 0) {
+                Serial.println("[PTP/IP] Socket closed by remote peer while reading");
+                return false;
+            }
             totalRead += bytesRead;
         } else {
-            delay(2);
+            if (!m_client.connected()) {
+                Serial.printf("[PTP/IP] Client disconnected while reading! Read %d of %d bytes\n", (int)totalRead, (int)len);
+                return false;
+            }
+            delay(5);
         }
     }
     return true;
@@ -80,7 +88,10 @@ bool PtpIpClient::readPacket(uint32_t& outType, std::vector<uint8_t>& outPayload
         return false;
     }
 
+    Serial.printf("[PTP/IP] Rx Packet Header: len=%u, type=%u\n", header.length, header.type);
+
     if (header.length < sizeof(PtpIpHeader)) {
+        Serial.printf("[PTP/IP] Invalid packet header length: %u\n", header.length);
         return false;
     }
 
@@ -106,30 +117,39 @@ bool PtpIpClient::sendInitCommandRequest(const String& clientName) {
         payload.push_back((uint8_t)clientName[i]);
         payload.push_back(0); // High byte for ASCII in UTF-16LE
     }
-    payload.push_back(0); // Null terminator
+    payload.push_back(0); // Null terminator (2 bytes in UTF-16)
     payload.push_back(0);
 
     // 3. Protocol Version (4 bytes, e.g. 0x00010000 = 1.0)
     uint32_t version = 0x00010000;
     payload.insert(payload.end(), (uint8_t*)&version, (uint8_t*)&version + 4);
 
+    Serial.printf("[PTP/IP] Sending InitCommandReq (%u bytes payload, clientName='%s')...\n", 
+                  (unsigned)payload.size(), clientName.c_str());
+
     if (!sendPacket(PTP_PKT_INIT_CMD_REQ, payload.data(), payload.size())) {
+        Serial.println("[PTP/IP] sendPacket failed for InitCommandReq!");
         return false;
     }
 
-    // Wait for InitCommandAck (type = 2)
+    // Wait for InitCommandAck (type = 2) with 10s timeout
     uint32_t respType = 0;
     std::vector<uint8_t> respPayload;
-    if (!readPacket(respType, respPayload)) {
+    if (!readPacket(respType, respPayload, 10000)) {
+        Serial.println("[PTP/IP] Failed to read InitCommandAck response!");
         return false;
     }
 
+    Serial.printf("[PTP/IP] Got response type=%u, payloadSize=%u\n", respType, (unsigned)respPayload.size());
+
     if (respType != PTP_PKT_INIT_CMD_ACK || respPayload.size() < 4) {
+        Serial.printf("[PTP/IP] Unexpected response to InitCommandReq (type=%u)\n", respType);
         return false;
     }
 
     // Extract Connection Number
     memcpy(&m_connectionNumber, respPayload.data(), 4);
+    Serial.printf("[PTP/IP] Connection Number = 0x%08X\n", m_connectionNumber);
     return true;
 }
 
