@@ -1,11 +1,22 @@
 #include "PtpIpClient.h"
-#include <esp_random.h>
+#include <WiFi.h>
 
 PtpIpClient::PtpIpClient() {
-    // Generate pseudo-random client GUID
-    for (int i = 0; i < 16; ++i) {
-        m_guid[i] = (uint8_t)(esp_random() & 0xFF);
-    }
+    // Stable client GUID derived from device MAC address
+    uint8_t mac[6] = {0};
+    WiFi.macAddress(mac);
+    memset(m_guid, 0, 16);
+    m_guid[0] = 0x00;
+    m_guid[1] = 0x00;
+    m_guid[2] = 0x00;
+    m_guid[3] = 0x00;
+    m_guid[4] = 0x00;
+    m_guid[5] = 0x00;
+    m_guid[6] = 0x00;
+    m_guid[7] = 0x00;
+    m_guid[8] = 0xFF;
+    m_guid[9] = 0xFF;
+    memcpy(m_guid + 10, mac, 6);
 }
 
 PtpIpClient::~PtpIpClient() {
@@ -141,6 +152,24 @@ bool PtpIpClient::sendInitCommandRequest(const String& clientName) {
     }
 
     Serial.printf("[PTP/IP] Got response type=%u, payloadSize=%u\n", respType, (unsigned)respPayload.size());
+
+    if (respPayload.size() >= 4) {
+        uint32_t code = 0;
+        memcpy(&code, respPayload.data(), 4);
+        Serial.printf("[PTP/IP] Response Code/Reason = 0x%08X\n", code);
+    }
+
+    if (respType == PTP_PKT_INIT_FAIL) {
+        uint32_t reason = 0;
+        if (respPayload.size() >= 4) memcpy(&reason, respPayload.data(), 4);
+        Serial.printf("[PTP/IP] Init_Command_Request REJECTED by camera (InitFail reason: 0x%08X)!\n", reason);
+        if (reason == 1) {
+            Serial.println("[PTP/IP] Reason 1 (Rejected Initiator): Camera rejected new device. Please press [OK/Change] on camera screen to pair with new device!");
+        } else if (reason == 2) {
+            Serial.println("[PTP/IP] Reason 2 (Busy): Camera is busy.");
+        }
+        return false;
+    }
 
     if (respType != PTP_PKT_INIT_CMD_ACK || respPayload.size() < 4) {
         Serial.printf("[PTP/IP] Unexpected response to InitCommandReq (type=%u)\n", respType);

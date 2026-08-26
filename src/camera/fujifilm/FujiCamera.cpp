@@ -77,8 +77,8 @@ bool FujiCamera::connect(const IPAddress& ip, uint16_t port) {
     }
 
     // 2. PTP/IP Init Command Request
-    Serial.println("[FujiCamera] Sending Init Command Request...");
-    if (!m_ptp.sendInitCommandRequest("M5StickS3 Remote")) {
+    Serial.println("[FujiCamera] Sending Init Command Request (Name: 'FUJIFILM Camera Remote')...");
+    if (!m_ptp.sendInitCommandRequest("FUJIFILM Camera Remote")) {
         Serial.println("[FujiCamera] Init Command Request failed!");
         m_ptp.disconnect();
         m_status = CameraStatus::ERROR_STATE;
