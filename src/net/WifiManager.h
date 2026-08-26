@@ -54,6 +54,7 @@ private:
     std::vector<ScannedAP> m_scannedAPs;
     StateCallback m_stateCallback = nullptr;
     unsigned long m_connectStartTime = 0;
+    unsigned long m_scanStartTime = 0;
     static constexpr unsigned long CONNECT_TIMEOUT_MS = 15000;
 };
 

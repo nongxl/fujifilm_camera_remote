@@ -14,13 +14,11 @@ void WifiManager::begin() {
 }
 
 void WifiManager::startScan() {
-    if (m_state == WifiState::SCANNING) return;
-
     m_scannedAPs.clear();
+    WiFi.scanDelete();
     setState(WifiState::SCANNING, "Scanning for WiFi networks...");
-    
-    // Asynchronous scan
-    WiFi.scanNetworks(true);
+    m_scanStartTime = millis();
+    WiFi.scanNetworks(true, false);
 }
 
 void WifiManager::connectTo(const String& ssid, const String& password) {
@@ -61,8 +59,9 @@ void WifiManager::update() {
             }
             WiFi.scanDelete();
             setState(WifiState::SCAN_DONE, "Found " + String(m_scannedAPs.size()) + " networks");
-        } else if (scanResult == WIFI_SCAN_FAILED) {
-            setState(WifiState::IDLE, "Scan failed");
+        } else if (millis() - m_scanStartTime > 10000) {
+            WiFi.scanDelete();
+            setState(WifiState::IDLE, "Scan timeout");
         }
     } else if (m_state == WifiState::CONNECTING) {
         if (WiFi.status() == WL_CONNECTED) {
