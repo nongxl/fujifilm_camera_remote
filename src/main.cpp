@@ -1,5 +1,6 @@
 #include <Arduino.h>
-#include <lvgl.h>
+#include "../.pio/libdeps/m5stack-sticks3/lvgl/lvgl.h"
+#define M5GFX_USING_REAL_LVGL 1
 #include <M5Unified.h>
 
 /* LVGL display buffer */
