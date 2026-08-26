@@ -4,6 +4,7 @@
 #include <Arduino.h>
 #include <IPAddress.h>
 #include <vector>
+#include "CameraProperties.h"
 
 enum class CameraBrand {
     UNKNOWN,
@@ -40,6 +41,12 @@ public:
     virtual bool startLiveView() = 0;
     virtual bool stopLiveView() = 0;
     virtual bool getLiveViewFrame(std::vector<uint8_t>& outJpeg) = 0;
+
+    // Parameter Synchronization & Control
+    virtual bool syncProperties() = 0;
+    virtual const ExposureState& getExposureState() const = 0;
+    virtual bool setPropertyValue(ExposurePropertyId propId, uint32_t value) = 0;
+    virtual bool adjustPropertyStep(ExposurePropertyId propId, int stepDelta) = 0;
 
     virtual void update() = 0;
 };
