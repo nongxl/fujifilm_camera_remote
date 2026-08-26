@@ -33,26 +33,68 @@ FujiCamera::~FujiCamera() {
 
 bool FujiCamera::connect(const IPAddress& ip, uint16_t port) {
     m_status = CameraStatus::CONNECTING;
-    
-    // 1. TCP Connection
-    if (!m_ptp.connect(ip, port, 5000)) {
+
+    // Candidate IPs to try: Gateway IP, 192.168.0.1, 192.168.133.1
+    std::vector<IPAddress> candidateIPs = { ip };
+    IPAddress fujiDefault(192, 168, 0, 1);
+    if (ip != fujiDefault) {
+        candidateIPs.push_back(fujiDefault);
+    }
+    IPAddress fujiSubnet(192, 168, 133, 1);
+    if (ip != fujiSubnet) {
+        candidateIPs.push_back(fujiSubnet);
+    }
+
+    // Fuji cameras listen on TCP 55740 for Wi-Fi PTP/IP, or 15740
+    std::vector<uint16_t> candidatePorts = { 55740, 15740 };
+    if (port != 15740 && port != 55740) {
+        candidatePorts.insert(candidatePorts.begin(), port);
+    }
+
+    bool tcpConnected = false;
+    IPAddress activeIP;
+    uint16_t activePort = 0;
+
+    for (const auto& targetIP : candidateIPs) {
+        for (uint16_t targetPort : candidatePorts) {
+            Serial.printf("[FujiCamera] Connecting TCP to %s:%d...\n", targetIP.toString().c_str(), targetPort);
+            if (m_ptp.connect(targetIP, targetPort, 2000)) {
+                Serial.printf("[FujiCamera] TCP Connected successfully to %s:%d!\n", targetIP.toString().c_str(), targetPort);
+                tcpConnected = true;
+                activeIP = targetIP;
+                activePort = targetPort;
+                break;
+            }
+            delay(100);
+        }
+        if (tcpConnected) break;
+    }
+
+    if (!tcpConnected) {
+        Serial.println("[FujiCamera] TCP Connection failed on all candidate endpoints.");
         m_status = CameraStatus::ERROR_STATE;
         return false;
     }
 
     // 2. PTP/IP Init Command Request
+    Serial.println("[FujiCamera] Sending Init Command Request...");
     if (!m_ptp.sendInitCommandRequest("M5StickS3 Remote")) {
+        Serial.println("[FujiCamera] Init Command Request failed!");
         m_ptp.disconnect();
         m_status = CameraStatus::ERROR_STATE;
         return false;
     }
+    Serial.println("[FujiCamera] Init Command Request ACKed!");
 
     // 3. Open PTP Session
+    Serial.println("[FujiCamera] Sending Open Session (SessionID = 1)...");
     if (!m_ptp.sendOpenSession(1)) {
+        Serial.println("[FujiCamera] Open Session failed!");
         m_ptp.disconnect();
         m_status = CameraStatus::ERROR_STATE;
         return false;
     }
+    Serial.println("[FujiCamera] Session Opened successfully!");
 
     m_status = CameraStatus::SESSION_OPENED;
     

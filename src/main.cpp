@@ -303,14 +303,14 @@ void loop()
             IPAddress cameraIP = g_wifiManager.getGatewayIP();
             Serial.printf("[App] WiFi Connected! Gateway IP (Camera): %s\n", cameraIP.toString().c_str());
 
-            if (g_camera.connect(cameraIP, 15740)) {
+            if (g_camera.connect(cameraIP, 55740)) {
                 Serial.println("[App] PTP/IP Connected and Session Opened successfully!");
                 g_appState = AppState::CAMERA_READY;
                 showDashboard(true);
                 updateUI("READY", g_targetSSID, "[A]: Shoot [B]: Select");
             } else {
                 Serial.println("[App] PTP/IP Handshake Failed!");
-                updateUI("PTP FAILED", "Check camera pairing mode", "[B]: Retry");
+                updateUI("PTP FAILED", "Press OK on Camera / Retry", "[B]: Retry");
             }
         } else if (g_wifiManager.getState() == WifiState::CONNECT_FAILED) {
             g_appState = AppState::IDLE;
