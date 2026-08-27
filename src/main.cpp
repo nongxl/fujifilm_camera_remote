@@ -215,7 +215,7 @@ void enterAdjustMode()
         }
     }
 
-    updateUI("TILT ADJUST", "Tilt left/right to adjust", "[A]: Set  [B]: Cancel");
+    updateUI("TILT ADJUST", "Tilt Remote to Adjust", "[A] Confirm Value\n[B] Cancel");
     Serial.printf("[UI] Entered IMU Adjust Mode for %s (Index=%d)\n", title, g_candidateIndex);
 }
 
@@ -233,7 +233,7 @@ void exitAdjustMode(bool applyChange)
 
     g_appState = AppState::CAMERA_READY;
     updateParameterCards();
-    updateUI("READY", g_targetSSID, "[A]: Shoot [B]: Select [Hold B]: Tilt Set");
+    updateUI("READY", g_targetSSID, "[A] Shoot  |  [B] LiveView\n[Hold B] Tilt Adjust");
 }
 
 void setup()
@@ -275,17 +275,20 @@ void setup()
     g_statusLabel = lv_label_create(scr);
     lv_label_set_text(g_statusLabel, "FUJI REMOTE");
     lv_obj_set_style_text_color(g_statusLabel, lv_color_hex(0x00FF88), 0);
-    lv_obj_align(g_statusLabel, LV_ALIGN_TOP_MID, 0, 2);
+    lv_obj_set_style_text_align(g_statusLabel, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_align(g_statusLabel, LV_ALIGN_TOP_MID, 0, 4);
 
     // Info details
     g_infoLabel = lv_label_create(scr);
     if (g_savedProfile.valid && g_savedProfile.ssid.length() > 0) {
         lv_label_set_text(g_infoLabel, ("Paired: " + g_savedProfile.ssid).c_str());
     } else {
-        lv_label_set_text(g_infoLabel, "Press A to scan Wi-Fi");
+        lv_label_set_text(g_infoLabel, "Ready to Connect");
     }
     lv_obj_set_style_text_color(g_infoLabel, lv_color_hex(0xFFFFFF), 0);
-    lv_obj_align(g_infoLabel, LV_ALIGN_CENTER, 0, 0);
+    lv_obj_set_style_text_align(g_infoLabel, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_width(g_infoLabel, 230);
+    lv_obj_align(g_infoLabel, LV_ALIGN_CENTER, 0, -8);
 
     // Parameter Dashboard Container (2x2 grid)
     g_paramContainer = lv_obj_create(scr);
@@ -335,15 +338,17 @@ void setup()
 
     lv_obj_add_flag(g_sliderContainer, LV_OBJ_FLAG_HIDDEN); // Initially hidden
 
-    // Action Hint
+    // Action Hint (2-line centered layout)
     g_btnLabel = lv_label_create(scr);
     if (g_savedProfile.valid && g_savedProfile.ssid.length() > 0) {
-        lv_label_set_text(g_btnLabel, "[A]: Fast Connect  [Hold B 3s]: Reset");
+        lv_label_set_text(g_btnLabel, "[A] Fast Connect\n[Hold B 3s] Reset Pairing");
     } else {
-        lv_label_set_text(g_btnLabel, "[A]: Scan  [B]: Reset");
+        lv_label_set_text(g_btnLabel, "[A] Scan Wi-Fi\n[B] Reset");
     }
-    lv_obj_set_style_text_color(g_btnLabel, lv_color_hex(0x888888), 0);
-    lv_obj_align(g_btnLabel, LV_ALIGN_BOTTOM_MID, 0, -2);
+    lv_obj_set_style_text_color(g_btnLabel, lv_color_hex(0x00E5FF), 0);
+    lv_obj_set_style_text_align(g_btnLabel, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_width(g_btnLabel, 230);
+    lv_obj_align(g_btnLabel, LV_ALIGN_BOTTOM_MID, 0, -6);
 
     // Initialize Network Manager
     g_wifiManager.setStateCallback([](WifiState state, const String& info) {
@@ -413,7 +418,7 @@ void loop()
                 g_targetSSID = g_savedProfile.ssid;
                 g_appState = AppState::CONNECTING_WIFI;
                 showDashboard(false);
-                updateUI("FAST CONNECT", g_targetSSID, "Connecting...");
+                updateUI("FAST CONNECT", g_targetSSID, "Connecting...\n[B] Cancel");
                 Serial.printf("[App] Fast connecting to %s (Ch:%d)...\n", g_targetSSID.c_str(), g_savedProfile.channel);
                 g_wifiManager.connectFast(g_savedProfile.ssid, g_savedProfile.channel, g_savedProfile.hasBssid ? g_savedProfile.bssid : nullptr);
             } else {
@@ -421,26 +426,26 @@ void loop()
                 Serial.println("[UI] Starting WiFi scan...");
                 g_appState = AppState::SCANNING_WIFI;
                 showDashboard(false);
-                updateUI("SCANNING...", "Searching for Fuji AP", "[Scanning]");
+                updateUI("SCANNING...", "Searching for Fuji AP", "Please wait...\n[B] Cancel");
                 g_wifiManager.startScan();
             }
         } else if (g_appState == AppState::WIFI_FOUND) {
             Serial.printf("[UI] Connecting to %s...\n", g_targetSSID.c_str());
             g_appState = AppState::CONNECTING_WIFI;
             showDashboard(false);
-            updateUI("CONNECTING...", g_targetSSID, "Please wait...");
+            updateUI("CONNECTING...", g_targetSSID, "Joining Wi-Fi...\n[B] Cancel");
             g_wifiManager.connectTo(g_targetSSID);
         } else if (g_appState == AppState::CAMERA_READY) {
             // Short press A: Trigger Shutter
             Serial.println("[UI] Triggering Shutter!");
             if (!g_inLiveViewMode) {
-                updateUI("SHUTTER!", "Capturing photo...", "[A]: Shoot [B]: Mode");
+                updateUI("SHUTTER!", "Capturing photo...", "[A] Shoot\n[B] Mode");
             }
             bool ok = g_camera.triggerShutter();
             Serial.printf("[Camera] Shutter result: %s\n", ok ? "SUCCESS" : "FAILED");
             delay(150);
             if (!g_inLiveViewMode) {
-                updateUI("READY", g_targetSSID, "[A]: Shoot [B]: Mode [Hold B]: Tilt Set");
+                updateUI("READY", g_targetSSID, "[A] Shoot  |  [B] LiveView\n[Hold B] Tilt Adjust");
             }
         } else if (g_appState == AppState::CAMERA_ADJUSTING_PARAM) {
             // Short press A in adjust mode: Confirm and Set value
@@ -468,11 +473,11 @@ void loop()
                     showDashboard(false);
                     M5.Display.fillScreen(TFT_BLACK);
                     g_liveViewStream.start(g_cameraIP);
-                    updateUI("LIVE VIEW", g_targetSSID, "[A]: Shoot [B]: Dash [Dbl B]: Mirror");
+                    updateUI("LIVE VIEW", g_targetSSID, "[A] Shoot  |  [B] Dash\n[Dbl B] Mirror");
                 } else {
                     g_liveViewStream.stop();
                     showDashboard(true);
-                    updateUI("READY", g_targetSSID, "[A]: Shoot [B]: LiveView [Hold B]: Tilt Set");
+                    updateUI("READY", g_targetSSID, "[A] Shoot  |  [B] LiveView\n[Hold B] Tilt Adjust");
                 }
                 Serial.printf("[UI] Switched to %s mode\n", g_inLiveViewMode ? "LIVEVIEW" : "DASHBOARD");
             }
@@ -487,9 +492,9 @@ void loop()
             g_liveViewStream.stop();
             showDashboard(false);
             if (g_savedProfile.valid) {
-                updateUI("FUJI REMOTE", "Paired: " + g_savedProfile.ssid, "[A]: Fast Connect  [Hold B 3s]: Reset");
+                updateUI("FUJI REMOTE", "Paired: " + g_savedProfile.ssid, "[A] Fast Connect\n[Hold B 3s] Reset Pairing");
             } else {
-                updateUI("FUJI REMOTE", "Press A to scan Wi-Fi", "[A]: Scan  [B]: Reset");
+                updateUI("FUJI REMOTE", "Ready to Connect", "[A] Scan Wi-Fi\n[B] Reset");
             }
         }
     }
@@ -499,7 +504,7 @@ void loop()
         StorageManager::getInstance().clearProfile();
         g_savedProfile.valid = false;
         g_savedProfile.ssid = "";
-        updateUI("RESET DONE", "Paired camera cleared", "[A]: Scan Wi-Fi");
+        updateUI("RESET DONE", "Paired camera cleared", "[A] Scan Wi-Fi\n[B] Reset");
         Serial.println("[UI] Cleared NVS profile by long-press B.");
         delay(300);
     }
@@ -534,20 +539,20 @@ void loop()
                 // Save to NVS
                 StorageManager::getInstance().saveProfile(g_targetSSID, fujiChannel, fujiBssid);
                 g_savedProfile = StorageManager::getInstance().loadProfile();
-                updateUI("CAMERA FOUND", g_targetSSID, "[A]: Connect");
+                updateUI("CAMERA FOUND", g_targetSSID, "[A] Connect\n[B] Re-scan");
             } else if (!aps.empty()) {
                 g_targetSSID = aps[0].ssid;
                 g_appState = AppState::WIFI_FOUND;
-                updateUI("AP FOUND", g_targetSSID, "[A]: Connect");
+                updateUI("AP FOUND", g_targetSSID, "[A] Connect\n[B] Re-scan");
             } else {
                 g_appState = AppState::IDLE;
-                updateUI("NOT FOUND", "No camera detected", "[A]: Re-scan");
+                updateUI("NOT FOUND", "No camera detected", "[A] Re-scan\n[B] Reset");
             }
         }
     } else if (g_appState == AppState::CONNECTING_WIFI) {
         if (g_wifiManager.isConnected()) {
             g_appState = AppState::CONNECTING_CAMERA;
-            updateUI("PTP/IP CONNECT", "Handshaking with camera...", "Connecting...");
+            updateUI("PTP/IP CONNECT", "Handshaking with camera...", "Connecting...\n[B] Retry");
             
             g_cameraIP = g_wifiManager.getGatewayIP();
             if (g_cameraIP == IPAddress(0, 0, 0, 0)) {
@@ -562,14 +567,14 @@ void loop()
                 showDashboard(false);
                 M5.Display.fillScreen(TFT_BLACK);
                 g_liveViewStream.start(g_cameraIP);
-                updateUI("LIVE VIEW", g_targetSSID, "[A]: Shoot [B]: Dash [Dbl B]: Mirror");
+                updateUI("LIVE VIEW", g_targetSSID, "[A] Shoot  |  [B] Dash\n[Dbl B] Mirror");
             } else {
                 Serial.println("[App] PTP/IP Handshake Failed!");
-                updateUI("PTP FAILED", "Press OK on Camera / Retry", "[B]: Retry");
+                updateUI("PTP FAILED", "Press OK on Camera", "[A] Re-connect\n[B] Retry");
             }
         } else if (g_wifiManager.getState() == WifiState::CONNECT_FAILED) {
             g_appState = AppState::IDLE;
-            updateUI("WIFI FAILED", "Could not join AP", "[A]: Re-scan");
+            updateUI("WIFI FAILED", "Could not join AP", "[A] Re-scan\n[B] Reset");
         }
     }
 
