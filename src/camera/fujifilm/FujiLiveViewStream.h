@@ -49,9 +49,10 @@ private:
     unsigned long m_lastFpsCalcTime = 0;
     uint32_t m_frameCounter = 0;
     float m_currentFps = 0.0f;
-
     static constexpr size_t MAX_FRAME_SIZE = 131072; // 128KB max per JPEG frame
     static constexpr unsigned long STREAM_WATCHDOG_MS = 3000;
+    static constexpr size_t CHUNK_SIZE = 8192;
+    uint8_t m_chunk[CHUNK_SIZE] = {0};
 };
 
 #endif // FUJI_LIVE_VIEW_STREAM_H

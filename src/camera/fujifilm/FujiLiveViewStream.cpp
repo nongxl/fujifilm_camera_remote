@@ -90,10 +90,9 @@ void FujiLiveViewStream::update() {
         return;
     }
 
-    // High-performance 8KB socket reader & block parser (prevents socket throttling)
-    uint8_t chunk[8192];
+    // High-performance 8KB socket reader & block parser (using heap member buffer)
     while (m_client.available() > 0) {
-        int n = m_client.read(chunk, sizeof(chunk));
+        int n = m_client.read(m_chunk, CHUNK_SIZE);
         if (n <= 0) break;
 
         int pos = 0;
@@ -102,7 +101,7 @@ void FujiLiveViewStream::update() {
                 // Search for 0xFF 0xD8 (SOI) in chunk
                 bool found = false;
                 for (int i = pos; i < n - 1; ++i) {
-                    if (chunk[i] == 0xFF && chunk[i+1] == 0xD8) {
+                    if (m_chunk[i] == 0xFF && m_chunk[i+1] == 0xD8) {
                         m_assembleBuffer.clear();
                         m_assembleBuffer.push_back(0xFF);
                         m_assembleBuffer.push_back(0xD8);
@@ -114,13 +113,13 @@ void FujiLiveViewStream::update() {
                 }
                 if (!found) {
                     // Check edge byte across chunk boundaries
-                    if (m_assembleBuffer.size() == 1 && m_assembleBuffer[0] == 0xFF && chunk[pos] == 0xD8) {
+                    if (m_assembleBuffer.size() == 1 && m_assembleBuffer[0] == 0xFF && m_chunk[pos] == 0xD8) {
                         m_assembleBuffer.push_back(0xD8);
                         pos++;
                         m_foundSOI = true;
                     } else {
                         m_assembleBuffer.clear();
-                        if (chunk[n-1] == 0xFF) m_assembleBuffer.push_back(0xFF);
+                        if (m_chunk[n-1] == 0xFF) m_assembleBuffer.push_back(0xFF);
                         break;
                     }
                 }
@@ -128,7 +127,7 @@ void FujiLiveViewStream::update() {
                 // We have SOI, search for EOI (0xFF 0xD9)
                 int eoiPos = -1;
                 for (int i = pos; i < n - 1; ++i) {
-                    if (chunk[i] == 0xFF && chunk[i+1] == 0xD9) {
+                    if (m_chunk[i] == 0xFF && m_chunk[i+1] == 0xD9) {
                         eoiPos = i;
                         break;
                     }
@@ -136,7 +135,7 @@ void FujiLiveViewStream::update() {
 
                 if (eoiPos >= 0) {
                     // Append up to EOI
-                    m_assembleBuffer.insert(m_assembleBuffer.end(), chunk + pos, chunk + eoiPos + 2);
+                    m_assembleBuffer.insert(m_assembleBuffer.end(), m_chunk + pos, m_chunk + eoiPos + 2);
                     pos = eoiPos + 2;
 
                     // Full Frame Completed!
@@ -157,7 +156,7 @@ void FujiLiveViewStream::update() {
                     m_foundSOI = false;
                 } else {
                     // No EOI in this chunk, append entire remaining chunk
-                    m_assembleBuffer.insert(m_assembleBuffer.end(), chunk + pos, chunk + n);
+                    m_assembleBuffer.insert(m_assembleBuffer.end(), m_chunk + pos, m_chunk + n);
                     pos = n;
 
                     if (m_assembleBuffer.size() > MAX_FRAME_SIZE) {
