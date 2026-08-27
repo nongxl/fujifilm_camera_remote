@@ -12,21 +12,29 @@ FujiCamera::FujiCamera() {
     for (auto val : m_exposureState.iso.allowedValues) {
         m_exposureState.iso.allowedFormatted.push_back(formatISO(val));
     }
+    m_exposureState.iso.currentValue = 200;
+    m_exposureState.iso.currentFormatted = formatISO(200);
 
     m_exposureState.aperture.allowedValues = { 100, 140, 200, 280, 400, 560, 800, 1100, 1600, 2200 };
     for (auto val : m_exposureState.aperture.allowedValues) {
         m_exposureState.aperture.allowedFormatted.push_back(formatAperture(val));
     }
+    m_exposureState.aperture.currentValue = 280;
+    m_exposureState.aperture.currentFormatted = formatAperture(280);
 
     m_exposureState.shutterSpeed.allowedValues = { 125, 250, 500, 1000, 2000, 4000, 8000, 16666, 33333, 66666, 125000, 250000, 500000, 1000000 };
     for (auto val : m_exposureState.shutterSpeed.allowedValues) {
         m_exposureState.shutterSpeed.allowedFormatted.push_back(formatShutter(val));
     }
+    m_exposureState.shutterSpeed.currentValue = 4000;
+    m_exposureState.shutterSpeed.currentFormatted = formatShutter(4000);
 
     m_exposureState.ev.allowedValues = { (uint32_t)-3000, (uint32_t)-2000, (uint32_t)-1000, 0, 1000, 2000, 3000 };
     for (auto val : m_exposureState.ev.allowedValues) {
         m_exposureState.ev.allowedFormatted.push_back(formatEV((int32_t)val));
     }
+    m_exposureState.ev.currentValue = 0;
+    m_exposureState.ev.currentFormatted = formatEV(0);
 }
 
 FujiCamera::~FujiCamera() {
@@ -320,16 +328,59 @@ void FujiCamera::parseCapabilities(const uint8_t* data, size_t len) {
 bool FujiCamera::syncProperties() {
     if (!isConnected()) return false;
 
-    // Refresh capabilities
+    // 1. Try capabilities query (0x902B)
     std::vector<uint8_t> capsData;
     uint16_t respCode = 0;
     if (m_ptp.executeFujiOperation(FUJI_OC_StartLiveView /* 0x902B */, {}, &capsData, &respCode)) {
         if (!capsData.empty()) {
             parseCapabilities(capsData.data(), capsData.size());
-            return true;
         }
     }
-    return false;
+
+    // 2. Query individual properties via 0x1015 (GetDevicePropValue)
+    struct PropQuery {
+        ExposurePropertyId id;
+        uint16_t fujiProp;
+    };
+    PropQuery queries[] = {
+        { ExposurePropertyId::ISO, FUJI_DPC_ISO },
+        { ExposurePropertyId::APERTURE, FUJI_DPC_Aperture },
+        { ExposurePropertyId::SHUTTER_SPEED, FUJI_DPC_ShutterSpeed },
+        { ExposurePropertyId::EXPOSURE_COMPENSATION, FUJI_DPC_ExposureCompensation }
+    };
+
+    for (const auto& q : queries) {
+        std::vector<uint8_t> propPayload = { (uint8_t)(q.fujiProp & 0xFF), (uint8_t)(q.fujiProp >> 8), 0, 0 };
+        std::vector<uint8_t> outVal;
+        uint16_t rCode = 0;
+        if (m_ptp.executeFujiOperation(PTP_OC_GetDevicePropValue, propPayload, &outVal, &rCode) && rCode == PTP_RC_OK && !outVal.empty()) {
+            uint32_t val = 0;
+            if (outVal.size() >= 4) memcpy(&val, outVal.data(), 4);
+            else if (outVal.size() == 2) memcpy(&val, outVal.data(), 2);
+            else if (outVal.size() == 1) val = outVal[0];
+
+            switch (q.id) {
+                case ExposurePropertyId::ISO:
+                    m_exposureState.iso.currentValue = val;
+                    m_exposureState.iso.currentFormatted = formatISO(val);
+                    break;
+                case ExposurePropertyId::APERTURE:
+                    m_exposureState.aperture.currentValue = val;
+                    m_exposureState.aperture.currentFormatted = formatAperture(val);
+                    break;
+                case ExposurePropertyId::SHUTTER_SPEED:
+                    m_exposureState.shutterSpeed.currentValue = val;
+                    m_exposureState.shutterSpeed.currentFormatted = formatShutter(val);
+                    break;
+                case ExposurePropertyId::EXPOSURE_COMPENSATION:
+                    m_exposureState.ev.currentValue = val;
+                    m_exposureState.ev.currentFormatted = formatEV((int32_t)val);
+                    break;
+                default: break;
+            }
+        }
+    }
+    return true;
 }
 
 bool FujiCamera::setPropertyValue(ExposurePropertyId propId, uint32_t value) {

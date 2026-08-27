@@ -5,10 +5,12 @@
 
 #include "net/WifiManager.h"
 #include "camera/fujifilm/FujiCamera.h"
+#include "ui/ImuManager.h"
 
 /* Global instances */
 static WifiManager g_wifiManager;
 static FujiCamera g_camera;
+static ImuManager g_imu;
 
 /* LVGL display buffer */
 static uint8_t *g_drawBuffer = nullptr;
@@ -28,6 +30,12 @@ static lv_obj_t *g_apertureValLabel = nullptr;
 static lv_obj_t *g_shutterValLabel = nullptr;
 static lv_obj_t *g_evValLabel = nullptr;
 
+/* IMU Slider UI overlay elements */
+static lv_obj_t *g_sliderContainer = nullptr;
+static lv_obj_t *g_sliderTitleLabel = nullptr;
+static lv_obj_t *g_sliderValLabel = nullptr;
+static lv_obj_t *g_sliderBar = nullptr;
+
 enum class SelectedParam {
     ISO,
     APERTURE,
@@ -37,6 +45,12 @@ enum class SelectedParam {
 
 static SelectedParam g_selectedParam = SelectedParam::ISO;
 
+/* Parameter Adjustment state */
+static int g_candidateIndex = 0;
+static std::vector<uint32_t> g_currentAllowedValues;
+static std::vector<String> g_currentAllowedFormatted;
+static ExposurePropertyId g_currentPropertyId = ExposurePropertyId::ISO;
+
 /* System state */
 enum class AppState {
     IDLE,
@@ -44,7 +58,8 @@ enum class AppState {
     WIFI_FOUND,
     CONNECTING_WIFI,
     CONNECTING_CAMERA,
-    CAMERA_READY
+    CAMERA_READY,
+    CAMERA_ADJUSTING_PARAM
 };
 
 static AppState g_appState = AppState::IDLE;
@@ -84,7 +99,7 @@ void updateParameterCards()
     // Highlight selected card
     auto highlightCard = [](lv_obj_t* card, bool selected) {
         if (!card) return;
-        lv_obj_set_style_border_color(card, selected ? lv_color_hex(0x00FF88) : lv_color_hex(0x444444), 0);
+        lv_obj_set_style_border_color(card, selected ? lv_color_hex(0x00FF88) : lv_color_hex(0x383838), 0);
         lv_obj_set_style_border_width(card, selected ? 2 : 1, 0);
         lv_obj_set_style_bg_color(card, selected ? lv_color_hex(0x282828) : lv_color_hex(0x1E1E1E), 0);
     };
@@ -131,6 +146,86 @@ void createParamCard(lv_obj_t* parent, const char* title, lv_obj_t*& outCard, lv
     lv_obj_align(outValLabel, LV_ALIGN_BOTTOM_RIGHT, -4, -1);
 }
 
+void enterAdjustMode()
+{
+    const auto& exp = g_camera.getExposureState();
+    const CameraProperty* targetProp = nullptr;
+    const char* title = "ISO";
+
+    switch (g_selectedParam) {
+        case SelectedParam::ISO:
+            g_currentPropertyId = ExposurePropertyId::ISO;
+            targetProp = &exp.iso;
+            title = "TILT ADJUST: ISO";
+            break;
+        case SelectedParam::APERTURE:
+            g_currentPropertyId = ExposurePropertyId::APERTURE;
+            targetProp = &exp.aperture;
+            title = "TILT ADJUST: APERTURE";
+            break;
+        case SelectedParam::SHUTTER:
+            g_currentPropertyId = ExposurePropertyId::SHUTTER_SPEED;
+            targetProp = &exp.shutterSpeed;
+            title = "TILT ADJUST: SHUTTER";
+            break;
+        case SelectedParam::EV:
+            g_currentPropertyId = ExposurePropertyId::EXPOSURE_COMPENSATION;
+            targetProp = &exp.ev;
+            title = "TILT ADJUST: EV";
+            break;
+    }
+
+    if (!targetProp || targetProp->allowedValues.empty()) return;
+
+    g_currentAllowedValues = targetProp->allowedValues;
+    g_currentAllowedFormatted = targetProp->allowedFormatted;
+
+    // Find current index
+    g_candidateIndex = 0;
+    for (size_t i = 0; i < g_currentAllowedValues.size(); ++i) {
+        if (g_currentAllowedValues[i] == targetProp->currentValue) {
+            g_candidateIndex = (int)i;
+            break;
+        }
+    }
+
+    g_imu.reset();
+    g_appState = AppState::CAMERA_ADJUSTING_PARAM;
+
+    // Show slider overlay
+    if (g_sliderContainer) {
+        lv_obj_clear_flag(g_sliderContainer, LV_OBJ_FLAG_HIDDEN);
+        if (g_sliderTitleLabel) lv_label_set_text(g_sliderTitleLabel, title);
+        if (g_sliderValLabel && g_candidateIndex < (int)g_currentAllowedFormatted.size()) {
+            lv_label_set_text(g_sliderValLabel, g_currentAllowedFormatted[g_candidateIndex].c_str());
+        }
+        if (g_sliderBar) {
+            lv_slider_set_range(g_sliderBar, 0, (int)g_currentAllowedValues.size() - 1);
+            lv_slider_set_value(g_sliderBar, g_candidateIndex, LV_ANIM_OFF);
+        }
+    }
+
+    updateUI("TILT ADJUST", "Tilt left/right to adjust", "[A]: Set  [B]: Cancel");
+    Serial.printf("[UI] Entered IMU Adjust Mode for %s (Index=%d)\n", title, g_candidateIndex);
+}
+
+void exitAdjustMode(bool applyChange)
+{
+    if (applyChange && g_candidateIndex >= 0 && g_candidateIndex < (int)g_currentAllowedValues.size()) {
+        uint32_t valToSet = g_currentAllowedValues[g_candidateIndex];
+        Serial.printf("[UI] Applying parameter %d = %u\n", (int)g_currentPropertyId, (unsigned)valToSet);
+        g_camera.setPropertyValue(g_currentPropertyId, valToSet);
+    }
+
+    if (g_sliderContainer) {
+        lv_obj_add_flag(g_sliderContainer, LV_OBJ_FLAG_HIDDEN);
+    }
+
+    g_appState = AppState::CAMERA_READY;
+    updateParameterCards();
+    updateUI("READY", g_targetSSID, "[A]: Shoot [B]: Select [Hold B]: Tilt Set");
+}
+
 void setup()
 {
     auto cfg = M5.config();
@@ -143,6 +238,9 @@ void setup()
     Serial.println("\n=================================");
     Serial.println("  Fujifilm Camera Remote - Phase 3");
     Serial.println("=================================");
+
+    // Initialize IMU
+    g_imu.begin();
 
     // Initialize LVGL 9
     lv_init();
@@ -190,6 +288,37 @@ void setup()
 
     showDashboard(false);
 
+    // IMU Slider Overlay Container
+    g_sliderContainer = lv_obj_create(scr);
+    lv_obj_set_size(g_sliderContainer, 236, 68);
+    lv_obj_align(g_sliderContainer, LV_ALIGN_BOTTOM_MID, 0, -2);
+    lv_obj_set_style_bg_color(g_sliderContainer, lv_color_hex(0x181818), 0);
+    lv_obj_set_style_border_color(g_sliderContainer, lv_color_hex(0x00E5FF), 0);
+    lv_obj_set_style_border_width(g_sliderContainer, 2, 0);
+    lv_obj_set_style_radius(g_sliderContainer, 8, 0);
+    lv_obj_set_style_pad_all(g_sliderContainer, 3, 0);
+    lv_obj_clear_flag(g_sliderContainer, LV_OBJ_FLAG_SCROLLABLE);
+
+    g_sliderTitleLabel = lv_label_create(g_sliderContainer);
+    lv_label_set_text(g_sliderTitleLabel, "TILT ADJUST");
+    lv_obj_set_style_text_color(g_sliderTitleLabel, lv_color_hex(0x00E5FF), 0);
+    lv_obj_align(g_sliderTitleLabel, LV_ALIGN_TOP_MID, 0, 1);
+
+    g_sliderValLabel = lv_label_create(g_sliderContainer);
+    lv_label_set_text(g_sliderValLabel, "--");
+    lv_obj_set_style_text_color(g_sliderValLabel, lv_color_hex(0xFFFFFF), 0);
+    lv_obj_align(g_sliderValLabel, LV_ALIGN_CENTER, 0, -1);
+
+    g_sliderBar = lv_slider_create(g_sliderContainer);
+    lv_obj_set_size(g_sliderBar, 210, 8);
+    lv_obj_align(g_sliderBar, LV_ALIGN_BOTTOM_MID, 0, -2);
+    lv_obj_set_style_bg_color(g_sliderBar, lv_color_hex(0x333333), LV_PART_MAIN);
+    lv_obj_set_style_bg_color(g_sliderBar, lv_color_hex(0x00E5FF), LV_PART_INDICATOR);
+    lv_obj_set_style_bg_color(g_sliderBar, lv_color_hex(0xFFFFFF), LV_PART_KNOB);
+    lv_obj_set_style_pad_all(g_sliderBar, 2, LV_PART_KNOB);
+
+    lv_obj_add_flag(g_sliderContainer, LV_OBJ_FLAG_HIDDEN); // Initially hidden
+
     // Action Hint
     g_btnLabel = lv_label_create(scr);
     lv_label_set_text(g_btnLabel, "[A]: Scan  [B]: Reset");
@@ -208,9 +337,29 @@ void loop()
     M5.update();
     g_wifiManager.update();
     g_camera.update();
+    g_imu.update();
 
     if (g_appState == AppState::CAMERA_READY) {
         updateParameterCards();
+    } else if (g_appState == AppState::CAMERA_ADJUSTING_PARAM) {
+        // IMU tilt step processing
+        int stepDelta = g_imu.getStepDelta();
+        if (stepDelta != 0 && !g_currentAllowedValues.empty()) {
+            int newIdx = g_candidateIndex + stepDelta;
+            if (newIdx < 0) newIdx = 0;
+            if (newIdx >= (int)g_currentAllowedValues.size()) newIdx = (int)g_currentAllowedValues.size() - 1;
+
+            if (newIdx != g_candidateIndex) {
+                g_candidateIndex = newIdx;
+                if (g_sliderValLabel && g_candidateIndex < (int)g_currentAllowedFormatted.size()) {
+                    lv_label_set_text(g_sliderValLabel, g_currentAllowedFormatted[g_candidateIndex].c_str());
+                }
+                if (g_sliderBar) {
+                    lv_slider_set_value(g_sliderBar, g_candidateIndex, LV_ANIM_ON);
+                }
+                Serial.printf("[IMU] Tilted step -> Index %d: %s\n", g_candidateIndex, g_currentAllowedFormatted[g_candidateIndex].c_str());
+            }
+        }
     }
 
     // Button A interaction
@@ -230,11 +379,14 @@ void loop()
         } else if (g_appState == AppState::CAMERA_READY) {
             // Short press A: Trigger Shutter
             Serial.println("[UI] Triggering Shutter!");
-            updateUI("SHUTTER!", "Capturing photo...", "[A]: Shoot [B]: Next");
+            updateUI("SHUTTER!", "Capturing photo...", "[A]: Shoot [B]: Select");
             bool ok = g_camera.triggerShutter();
             Serial.printf("[Camera] Shutter result: %s\n", ok ? "SUCCESS" : "FAILED");
             delay(150);
-            updateUI("READY", g_targetSSID, "[A]: Shoot [B]: Param+");
+            updateUI("READY", g_targetSSID, "[A]: Shoot [B]: Select [Hold B]: Tilt Set");
+        } else if (g_appState == AppState::CAMERA_ADJUSTING_PARAM) {
+            // Short press A in adjust mode: Confirm and Set value
+            exitAdjustMode(true);
         }
     }
 
@@ -249,6 +401,9 @@ void loop()
 
             updateParameterCards();
             Serial.printf("[UI] Selected Param: %d\n", (int)g_selectedParam);
+        } else if (g_appState == AppState::CAMERA_ADJUSTING_PARAM) {
+            // Short press B in adjust mode: Cancel
+            exitAdjustMode(false);
         } else {
             Serial.println("[UI] Resetting connection...");
             g_camera.disconnect();
@@ -259,17 +414,10 @@ void loop()
         }
     }
 
-    // Long press Button B: Adjust current selected parameter +1 step
-    if (M5.BtnB.pressedFor(600) && g_appState == AppState::CAMERA_READY) {
-        ExposurePropertyId targetId = ExposurePropertyId::ISO;
-        if (g_selectedParam == SelectedParam::APERTURE) targetId = ExposurePropertyId::APERTURE;
-        else if (g_selectedParam == SelectedParam::SHUTTER) targetId = ExposurePropertyId::SHUTTER_SPEED;
-        else if (g_selectedParam == SelectedParam::EV) targetId = ExposurePropertyId::EXPOSURE_COMPENSATION;
-
-        Serial.printf("[UI] Adjusting parameter %d step +1\n", (int)targetId);
-        g_camera.adjustPropertyStep(targetId, 1);
-        updateParameterCards();
-        delay(200); // Debounce step
+    // Long press Button B: Enter IMU Tilt Adjust Mode
+    if (M5.BtnB.pressedFor(500) && g_appState == AppState::CAMERA_READY) {
+        enterAdjustMode();
+        delay(200); // Debounce trigger
     }
 
     // State machine transitions
@@ -309,7 +457,7 @@ void loop()
                 Serial.println("[App] PTP/IP Connected and Session Opened successfully!");
                 g_appState = AppState::CAMERA_READY;
                 showDashboard(true);
-                updateUI("READY", g_targetSSID, "[A]: Shoot [B]: Select");
+                updateUI("READY", g_targetSSID, "[A]: Shoot [B]: Select [Hold B]: Tilt Set");
             } else {
                 Serial.println("[App] PTP/IP Handshake Failed!");
                 updateUI("PTP FAILED", "Press OK on Camera / Retry", "[B]: Retry");
