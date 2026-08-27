@@ -21,7 +21,18 @@ public:
     bool sendOpenSession(uint32_t sessionId = 1);
     bool sendCloseSession();
 
-    // Generic operation execution
+    // Fuji proprietary operation execution
+    bool executeFujiOperation(uint16_t opCode, 
+                             const std::vector<uint8_t>& payload = {},
+                             std::vector<uint8_t>* outData = nullptr,
+                             uint16_t* outRespCode = nullptr);
+
+    bool executeFujiTwoPartOperation(uint16_t opCode,
+                                    const std::vector<uint8_t>& part1Data,
+                                    const std::vector<uint8_t>& part2Data,
+                                    uint16_t* outRespCode = nullptr);
+
+    // Standard PTP/IP operation execution
     bool executeOperation(uint16_t opCode, 
                           const std::vector<uint32_t>& params = {},
                           std::vector<uint8_t>* outData = nullptr,
@@ -35,6 +46,10 @@ private:
     bool sendPacket(uint32_t type, const uint8_t* payload, size_t payloadLen);
     bool readExact(uint8_t* buffer, size_t len, uint32_t timeoutMs = 5000);
     bool readPacket(uint32_t& outType, std::vector<uint8_t>& outPayload, uint32_t timeoutMs = 5000);
+
+    // Fuji-specific packet sending & receiving
+    bool sendFujiPacket(uint16_t index, uint16_t opCode, uint32_t txId, const uint8_t* payload = nullptr, size_t payloadLen = 0);
+    bool receiveFujiPacket(uint16_t& outIndex, uint16_t& outCode, uint32_t& outTxId, std::vector<uint8_t>& outPayload, uint32_t timeoutMs = 5000);
 
     WiFiClient m_client;
     uint32_t m_transactionId = 0;

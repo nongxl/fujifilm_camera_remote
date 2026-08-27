@@ -106,6 +106,44 @@ struct PtpIpHeader {
     uint32_t length;
     uint32_t type;
 };
+
+// Fuji proprietary packet header (12 bytes total)
+// Layout: [length: 4B][index: 2B][code: 2B][txId: 4B]
+struct FujiPacketHeader {
+    uint32_t length; // Total length including this header
+    uint16_t index;  // 1 = Request/Part1, 2 = Part2, 3 = Response
+    uint16_t code;   // OpCode (for Request) or RespCode (0x2001 for Response)
+    uint32_t txId;   // Transaction ID
+};
 #pragma pack(pop)
+
+// Fuji proprietary Device Property Codes
+enum FujiPropCode : uint16_t {
+    FUJI_DPC_FilmSimulation         = 0xD001,
+    FUJI_DPC_ImageFormat            = 0xD018,
+    FUJI_DPC_RecModeEnable          = 0xD019,
+    FUJI_DPC_F_SS_Control           = 0xD028,
+    FUJI_DPC_ISO                    = 0xD02A,
+    FUJI_DPC_MovieISO               = 0xD02B,
+    FUJI_DPC_FocusPoint             = 0xD17C,
+    FUJI_DPC_FocusLock              = 0xD209,
+    FUJI_DPC_DeviceError            = 0xD21B,
+    FUJI_DPC_ImageSpaceSD           = 0xD229,
+    FUJI_DPC_MovieRemainingTime     = 0xD22A,
+    FUJI_DPC_ShutterSpeed           = 0xD240,
+    FUJI_DPC_ImageAspect            = 0xD241,
+    FUJI_DPC_BatteryLevel           = 0xD242,
+    FUJI_DPC_ObjectVersion          = 0xDF01,
+    FUJI_DPC_RemoteVersion          = 0xDF24,
+    FUJI_DPC_RemoteGetVersion       = 0xDF25,
+    // Standard PTP mapped
+    FUJI_DPC_WhiteBalance           = 0x5005,
+    FUJI_DPC_Aperture               = 0x5007,
+    FUJI_DPC_FocusMode              = 0x500A,
+    FUJI_DPC_Flash                  = 0x500C,
+    FUJI_DPC_ShootingMode           = 0x500E,
+    FUJI_DPC_ExposureCompensation   = 0x5010,
+    FUJI_DPC_SelfTimer              = 0x5012
+};
 
 #endif // PTP_TYPES_H

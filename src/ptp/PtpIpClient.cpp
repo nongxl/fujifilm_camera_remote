@@ -282,10 +282,158 @@ bool PtpIpClient::sendFujiInitCommandRequest(const String& clientName) {
     return true;
 }
 
+bool PtpIpClient::sendFujiPacket(uint16_t index, uint16_t opCode, uint32_t txId, const uint8_t* payload, size_t payloadLen) {
+    if (!isConnected()) return false;
+
+    uint32_t totalLen = sizeof(FujiPacketHeader) + payloadLen;
+    std::vector<uint8_t> buffer(totalLen);
+
+    FujiPacketHeader header;
+    header.length = totalLen;
+    header.index = index;
+    header.code = opCode;
+    header.txId = txId;
+
+    memcpy(buffer.data(), &header, sizeof(header));
+    if (payloadLen > 0 && payload != nullptr) {
+        memcpy(buffer.data() + sizeof(header), payload, payloadLen);
+    }
+
+    Serial.printf("[FujiPTP] Tx: len=%u, index=%u, op=0x%04X, txId=%u, payloadLen=%u\n",
+                  totalLen, index, opCode, txId, (unsigned)payloadLen);
+    Serial.print("[FujiPTP] Tx HEX: ");
+    for (size_t i = 0; i < totalLen; i++) {
+        Serial.printf("%02X ", buffer[i]);
+    }
+    Serial.println();
+
+    if (m_client.write(buffer.data(), totalLen) != totalLen) {
+        Serial.println("[FujiPTP] Failed to write complete packet");
+        return false;
+    }
+    return true;
+}
+
+bool PtpIpClient::receiveFujiPacket(uint16_t& outIndex, uint16_t& outCode, uint32_t& outTxId, std::vector<uint8_t>& outPayload, uint32_t timeoutMs) {
+    if (!isConnected()) return false;
+
+    // First read total length (4 bytes)
+    uint32_t totalLen = 0;
+    if (!readExact((uint8_t*)&totalLen, sizeof(totalLen), timeoutMs)) {
+        return false;
+    }
+
+    if (totalLen < sizeof(FujiPacketHeader)) {
+        Serial.printf("[FujiPTP] Invalid packet length: %u\n", totalLen);
+        return false;
+    }
+
+    // Next read remainder of header: index (2), code (2), txId (4) -> 8 bytes
+    struct {
+        uint16_t index;
+        uint16_t code;
+        uint32_t txId;
+    } __attribute__((packed)) hdrRest;
+
+    if (!readExact((uint8_t*)&hdrRest, sizeof(hdrRest), timeoutMs)) {
+        return false;
+    }
+
+    outIndex = hdrRest.index;
+    outCode = hdrRest.code;
+    outTxId = hdrRest.txId;
+
+    size_t payloadLen = totalLen - sizeof(FujiPacketHeader);
+    outPayload.resize(payloadLen);
+    if (payloadLen > 0) {
+        if (!readExact(outPayload.data(), payloadLen, timeoutMs)) {
+            return false;
+        }
+    }
+
+    Serial.printf("[FujiPTP] Rx: len=%u, index=%u, code=0x%04X, txId=%u, payloadLen=%u\n",
+                  totalLen, outIndex, outCode, outTxId, (unsigned)payloadLen);
+    return true;
+}
+
+bool PtpIpClient::executeFujiOperation(uint16_t opCode, 
+                                      const std::vector<uint8_t>& payload,
+                                      std::vector<uint8_t>* outData,
+                                      uint16_t* outRespCode) {
+    if (!isConnected()) return false;
+
+    m_transactionId++;
+    uint32_t txId = m_transactionId;
+
+    if (!sendFujiPacket(1, opCode, txId, payload.empty() ? nullptr : payload.data(), payload.size())) {
+        return false;
+    }
+
+    // Fuji can return a Data packet followed by a Response packet, or just a Response packet
+    bool gotResponse = false;
+    while (!gotResponse) {
+        uint16_t index = 0, code = 0;
+        uint32_t rxTxId = 0;
+        std::vector<uint8_t> rxPayload;
+        if (!receiveFujiPacket(index, code, rxTxId, rxPayload, 10000)) {
+            return false;
+        }
+
+        if (index == 2) {
+            // Data payload packet
+            if (outData) {
+                outData->insert(outData->end(), rxPayload.begin(), rxPayload.end());
+            }
+        } else if (index == 3) {
+            // Response packet (code is return code, e.g. 0x2001)
+            if (outRespCode) *outRespCode = code;
+            gotResponse = true;
+            return (code == PTP_RC_OK || code == PTP_RC_SessionAlreadyOpened);
+        } else {
+            // Unknown or unexpected index
+            Serial.printf("[FujiPTP] Unexpected packet index: %u\n", index);
+            return false;
+        }
+    }
+    return true;
+}
+
+bool PtpIpClient::executeFujiTwoPartOperation(uint16_t opCode,
+                                            const std::vector<uint8_t>& part1Data,
+                                            const std::vector<uint8_t>& part2Data,
+                                            uint16_t* outRespCode) {
+    if (!isConnected()) return false;
+
+    m_transactionId++;
+    uint32_t txId = m_transactionId;
+
+    // Send Part 1 (index = 1)
+    if (!sendFujiPacket(1, opCode, txId, part1Data.empty() ? nullptr : part1Data.data(), part1Data.size())) {
+        return false;
+    }
+
+    // Send Part 2 (index = 2)
+    if (!sendFujiPacket(2, opCode, txId, part2Data.empty() ? nullptr : part2Data.data(), part2Data.size())) {
+        return false;
+    }
+
+    // Wait for response (index = 3)
+    uint16_t index = 0, code = 0;
+    uint32_t rxTxId = 0;
+    std::vector<uint8_t> rxPayload;
+    if (!receiveFujiPacket(index, code, rxTxId, rxPayload, 10000)) {
+        return false;
+    }
+
+    if (outRespCode) *outRespCode = code;
+    return (index == 3 && (code == PTP_RC_OK || code == PTP_RC_SessionAlreadyOpened));
+}
+
 bool PtpIpClient::sendOpenSession(uint32_t sessionId) {
-    std::vector<uint32_t> params = { sessionId };
+    std::vector<uint8_t> payload(4);
+    memcpy(payload.data(), &sessionId, 4);
     uint16_t respCode = 0;
-    bool success = executeOperation(PTP_OC_OpenSession, params, nullptr, nullptr, &respCode);
+    bool success = executeFujiOperation(PTP_OC_OpenSession, payload, nullptr, &respCode);
     if (success && (respCode == PTP_RC_OK || respCode == PTP_RC_SessionAlreadyOpened)) {
         m_sessionId = sessionId;
         return true;
@@ -295,7 +443,7 @@ bool PtpIpClient::sendOpenSession(uint32_t sessionId) {
 
 bool PtpIpClient::sendCloseSession() {
     uint16_t respCode = 0;
-    bool success = executeOperation(PTP_OC_CloseSession, {}, nullptr, nullptr, &respCode);
+    bool success = executeFujiOperation(PTP_OC_CloseSession, {}, nullptr, &respCode);
     m_sessionId = 0;
     return success;
 }

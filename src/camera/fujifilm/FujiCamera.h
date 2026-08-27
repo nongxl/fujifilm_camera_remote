@@ -31,7 +31,11 @@ public:
     void update() override;
 
 private:
+    void parseCapabilities(const uint8_t* data, size_t len);
+
     PtpIpClient m_ptp;
+    WiFiClient m_liveViewClient;
+    IPAddress m_cameraIp;
     CameraStatus m_status = CameraStatus::DISCONNECTED;
     String m_modelName = "Fuji Camera";
     ExposureState m_exposureState;
