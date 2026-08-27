@@ -93,11 +93,12 @@ enum PtpRespCode : uint16_t {
     PTP_RC_SpecificationOfDestinationUnsupported = 0x2020
 };
 
-// Data Phase flags for Operation Request
+// Data Phase flags for Operation Request (ISO 15740 / PTP/IP)
 enum PtpDataPhase : uint32_t {
-    PTP_DATA_PHASE_NONE = 0,
-    PTP_DATA_PHASE_OUT  = 1, // Client to device
-    PTP_DATA_PHASE_IN   = 2  // Device to client
+    PTP_DATA_PHASE_UNKNOWN = 1,
+    PTP_DATA_PHASE_NONE    = 2, // No data or Data In phase
+    PTP_DATA_PHASE_IN      = 2, // Same as NONE (Initiator to Responder data phase will not occur)
+    PTP_DATA_PHASE_OUT     = 3  // Client to device (Data Out phase will occur)
 };
 
 #pragma pack(push, 1)
