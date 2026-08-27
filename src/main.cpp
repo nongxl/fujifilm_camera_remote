@@ -112,29 +112,31 @@ void showDashboard(bool show)
 void createParamCard(lv_obj_t* parent, const char* title, lv_obj_t*& outCard, lv_obj_t*& outValLabel)
 {
     outCard = lv_obj_create(parent);
-    lv_obj_set_size(outCard, 105, 42);
+    lv_obj_set_size(outCard, 114, 40);
     lv_obj_set_style_bg_color(outCard, lv_color_hex(0x1E1E1E), 0);
-    lv_obj_set_style_border_color(outCard, lv_color_hex(0x444444), 0);
+    lv_obj_set_style_border_color(outCard, lv_color_hex(0x383838), 0);
     lv_obj_set_style_border_width(outCard, 1, 0);
-    lv_obj_set_style_radius(outCard, 4, 0);
+    lv_obj_set_style_radius(outCard, 6, 0);
     lv_obj_set_style_pad_all(outCard, 2, 0);
     lv_obj_clear_flag(outCard, LV_OBJ_FLAG_SCROLLABLE);
 
     lv_obj_t* titleLbl = lv_label_create(outCard);
     lv_label_set_text(titleLbl, title);
     lv_obj_set_style_text_color(titleLbl, lv_color_hex(0x888888), 0);
-    lv_obj_align(titleLbl, LV_ALIGN_TOP_LEFT, 2, 1);
+    lv_obj_align(titleLbl, LV_ALIGN_TOP_LEFT, 4, 1);
 
     outValLabel = lv_label_create(outCard);
     lv_label_set_text(outValLabel, "--");
     lv_obj_set_style_text_color(outValLabel, lv_color_hex(0xFFFFFF), 0);
-    lv_obj_align(outValLabel, LV_ALIGN_BOTTOM_RIGHT, -2, -1);
+    lv_obj_align(outValLabel, LV_ALIGN_BOTTOM_RIGHT, -4, -1);
 }
 
 void setup()
 {
     auto cfg = M5.config();
     M5.begin(cfg);
+    M5.Display.setRotation(1); // Landscape mode (240x135)
+    
     Serial.begin(115200);
     delay(300);
 
@@ -163,18 +165,18 @@ void setup()
     g_statusLabel = lv_label_create(scr);
     lv_label_set_text(g_statusLabel, "FUJI REMOTE");
     lv_obj_set_style_text_color(g_statusLabel, lv_color_hex(0x00FF88), 0);
-    lv_obj_align(g_statusLabel, LV_ALIGN_TOP_MID, 0, 4);
+    lv_obj_align(g_statusLabel, LV_ALIGN_TOP_MID, 0, 2);
 
     // Info details (shown when not connected)
     g_infoLabel = lv_label_create(scr);
     lv_label_set_text(g_infoLabel, "Press A to scan Wi-Fi");
     lv_obj_set_style_text_color(g_infoLabel, lv_color_hex(0xFFFFFF), 0);
-    lv_obj_align(g_infoLabel, LV_ALIGN_CENTER, 0, -4);
+    lv_obj_align(g_infoLabel, LV_ALIGN_CENTER, 0, 0);
 
     // Parameter Dashboard Container (2x2 grid)
     g_paramContainer = lv_obj_create(scr);
-    lv_obj_set_size(g_paramContainer, 230, 95);
-    lv_obj_align(g_paramContainer, LV_ALIGN_CENTER, 0, 0);
+    lv_obj_set_size(g_paramContainer, 236, 88);
+    lv_obj_align(g_paramContainer, LV_ALIGN_CENTER, 0, 1);
     lv_obj_set_style_bg_opa(g_paramContainer, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(g_paramContainer, 0, 0);
     lv_obj_set_style_pad_all(g_paramContainer, 0, 0);
@@ -192,7 +194,7 @@ void setup()
     g_btnLabel = lv_label_create(scr);
     lv_label_set_text(g_btnLabel, "[A]: Scan  [B]: Reset");
     lv_obj_set_style_text_color(g_btnLabel, lv_color_hex(0x888888), 0);
-    lv_obj_align(g_btnLabel, LV_ALIGN_BOTTOM_MID, 0, -4);
+    lv_obj_align(g_btnLabel, LV_ALIGN_BOTTOM_MID, 0, -2);
 
     // Initialize Network Manager
     g_wifiManager.setStateCallback([](WifiState state, const String& info) {
