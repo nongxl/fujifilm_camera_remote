@@ -22,12 +22,24 @@ FujiCamera::FujiCamera() {
     m_exposureState.aperture.currentValue = 280;
     m_exposureState.aperture.currentFormatted = formatAperture(280);
 
-    m_exposureState.shutterSpeed.allowedValues = { 125, 250, 500, 1000, 2000, 4000, 8000, 16666, 33333, 66666, 125000, 250000, 500000, 1000000 };
+    m_exposureState.shutterSpeed.allowedValues = { 
+        (uint32_t)(0x80000000 | 4000000), // 1/4000s
+        (uint32_t)(0x80000000 | 2000000), // 1/2000s
+        (uint32_t)(0x80000000 | 1000000), // 1/1000s
+        (uint32_t)(0x80000000 | 500000),  // 1/500s
+        (uint32_t)(0x80000000 | 250000),  // 1/250s
+        (uint32_t)(0x80000000 | 125000),  // 1/125s
+        (uint32_t)(0x80000000 | 60000),   // 1/60s
+        (uint32_t)(0x80000000 | 30000),   // 1/30s
+        (uint32_t)(0x80000000 | 15000),   // 1/15s
+        1000,                             // 1s
+        2000                              // 2s
+    };
     for (auto val : m_exposureState.shutterSpeed.allowedValues) {
         m_exposureState.shutterSpeed.allowedFormatted.push_back(formatShutter(val));
     }
-    m_exposureState.shutterSpeed.currentValue = 4000;
-    m_exposureState.shutterSpeed.currentFormatted = formatShutter(4000);
+    m_exposureState.shutterSpeed.currentValue = 0x80000000 | 250000;
+    m_exposureState.shutterSpeed.currentFormatted = formatShutter(0x80000000 | 250000);
 
     m_exposureState.ev.allowedValues = { (uint32_t)-3000, (uint32_t)-2000, (uint32_t)-1000, 0, 1000, 2000, 3000 };
     for (auto val : m_exposureState.ev.allowedValues) {
@@ -328,16 +340,7 @@ void FujiCamera::parseCapabilities(const uint8_t* data, size_t len) {
 bool FujiCamera::syncProperties() {
     if (!isConnected()) return false;
 
-    // 1. Try capabilities query (0x902B)
-    std::vector<uint8_t> capsData;
-    uint16_t respCode = 0;
-    if (m_ptp.executeFujiOperation(FUJI_OC_StartLiveView /* 0x902B */, {}, &capsData, &respCode)) {
-        if (!capsData.empty()) {
-            parseCapabilities(capsData.data(), capsData.size());
-        }
-    }
-
-    // 2. Query individual properties via 0x1015 (GetDevicePropValue)
+    // Query individual properties via 0x1015 (GetDevicePropValue)
     struct PropQuery {
         ExposurePropertyId id;
         uint16_t fujiProp;

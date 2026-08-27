@@ -1,8 +1,8 @@
 #include "FujiLiveViewStream.h"
 
 FujiLiveViewStream::FujiLiveViewStream() {
-    m_assembleBuffer.reserve(32768);
-    m_frameBuffer.reserve(32768);
+    m_assembleBuffer.reserve(65536);
+    m_frameBuffer.reserve(65536);
 }
 
 FujiLiveViewStream::~FujiLiveViewStream() {
@@ -22,12 +22,12 @@ bool FujiLiveViewStream::start(const IPAddress& cameraIp, uint16_t port) {
     m_currentFps = 0.0f;
 
     Serial.printf("[LiveView] Connecting to %s:%d...\n", m_cameraIp.toString().c_str(), m_port);
-    m_client.setNoDelay(true);
-    m_client.setTimeout(2);
     if (!m_client.connect(m_cameraIp, m_port)) {
         Serial.println("[LiveView] Initial connection failed, will retry in background.");
         return false;
     }
+    m_client.setNoDelay(true);
+    m_client.setTimeout(2);
 
     Serial.println("[LiveView] Connected to MJPEG Stream!");
     return true;
@@ -51,43 +51,66 @@ void FujiLiveViewStream::update() {
         if (millis() - m_lastFrameTime > STREAM_WATCHDOG_MS) {
             Serial.println("[LiveView] Watchdog triggered: Reconnecting stream socket...");
             m_client.stop();
-            m_client.connect(m_cameraIp, m_port);
+            if (m_client.connect(m_cameraIp, m_port)) {
+                m_client.setNoDelay(true);
+                m_client.setTimeout(2);
+                Serial.println("[LiveView] Reconnected to MJPEG Stream!");
+            }
             m_lastFrameTime = millis();
         }
         return;
     }
 
-    // Read incoming stream data
-    uint8_t tempBuf[2048];
+    // High-performance block reader & SOI/EOI scanner
+    uint8_t chunk[4096];
     while (m_client.available() > 0) {
-        int bytesRead = m_client.read(tempBuf, sizeof(tempBuf));
-        if (bytesRead <= 0) break;
+        int n = m_client.read(chunk, sizeof(chunk));
+        if (n <= 0) break;
 
-        for (int i = 0; i < bytesRead; ++i) {
-            uint8_t byte = tempBuf[i];
-
+        int pos = 0;
+        while (pos < n) {
             if (!m_foundSOI) {
-                // Look for SOI (0xFF 0xD8)
-                if (m_assembleBuffer.empty()) {
-                    if (byte == 0xFF) {
-                        m_assembleBuffer.push_back(byte);
-                    }
-                } else if (m_assembleBuffer.size() == 1 && m_assembleBuffer[0] == 0xFF) {
-                    if (byte == 0xD8) {
-                        m_assembleBuffer.push_back(byte);
-                        m_foundSOI = true;
-                    } else if (byte != 0xFF) {
+                // Search for 0xFF 0xD8 (SOI) in chunk
+                bool found = false;
+                for (int i = pos; i < n - 1; ++i) {
+                    if (chunk[i] == 0xFF && chunk[i+1] == 0xD8) {
                         m_assembleBuffer.clear();
+                        m_assembleBuffer.push_back(0xFF);
+                        m_assembleBuffer.push_back(0xD8);
+                        pos = i + 2;
+                        m_foundSOI = true;
+                        found = true;
+                        break;
+                    }
+                }
+                if (!found) {
+                    // Check edge byte across chunk boundaries
+                    if (m_assembleBuffer.size() == 1 && m_assembleBuffer[0] == 0xFF && chunk[pos] == 0xD8) {
+                        m_assembleBuffer.push_back(0xD8);
+                        pos++;
+                        m_foundSOI = true;
+                    } else {
+                        m_assembleBuffer.clear();
+                        if (chunk[n-1] == 0xFF) m_assembleBuffer.push_back(0xFF);
+                        break;
                     }
                 }
             } else {
-                // Accumulate JPEG bytes
-                m_assembleBuffer.push_back(byte);
+                // We have SOI, search for EOI (0xFF 0xD9)
+                int eoiPos = -1;
+                for (int i = pos; i < n - 1; ++i) {
+                    if (chunk[i] == 0xFF && chunk[i+1] == 0xD9) {
+                        eoiPos = i;
+                        break;
+                    }
+                }
 
-                // Look for EOI (0xFF 0xD9)
-                size_t sz = m_assembleBuffer.size();
-                if (sz >= 2 && m_assembleBuffer[sz - 2] == 0xFF && m_assembleBuffer[sz - 1] == 0xD9) {
-                    // Completed full frame!
+                if (eoiPos >= 0) {
+                    // Append up to EOI
+                    m_assembleBuffer.insert(m_assembleBuffer.end(), chunk + pos, chunk + eoiPos + 2);
+                    pos = eoiPos + 2;
+
+                    // Frame complete!
                     m_frameBuffer = m_assembleBuffer;
                     m_hasNewFrame = true;
                     m_lastFrameTime = millis();
@@ -103,10 +126,15 @@ void FujiLiveViewStream::update() {
                     // Reset assembler for next frame
                     m_assembleBuffer.clear();
                     m_foundSOI = false;
-                } else if (sz >= MAX_FRAME_SIZE) {
-                    // Frame corrupted or overflow, reset
-                    m_assembleBuffer.clear();
-                    m_foundSOI = false;
+                } else {
+                    // No EOI in this chunk, append entire remaining chunk
+                    m_assembleBuffer.insert(m_assembleBuffer.end(), chunk + pos, chunk + n);
+                    pos = n;
+
+                    if (m_assembleBuffer.size() > MAX_FRAME_SIZE) {
+                        m_assembleBuffer.clear();
+                        m_foundSOI = false;
+                    }
                 }
             }
         }

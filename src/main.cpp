@@ -361,24 +361,6 @@ void loop()
     g_liveViewStream.update();
 
     if (g_appState == AppState::CAMERA_READY) {
-        // IMU orientation check & Dual-Mode dispatch
-        if (!g_liveViewLocked) {
-            DeviceOrientation orient = g_imu.getOrientation();
-            if (orient == DeviceOrientation::PORTRAIT && g_inLiveViewMode) {
-                // Switch to Portrait Dashboard
-                g_inLiveViewMode = false;
-                g_liveViewStream.stop();
-                showDashboard(true);
-                updateUI("READY", g_targetSSID, "[A]: Shoot [B]: Select [Hold B]: Tilt Set");
-            } else if (orient == DeviceOrientation::LANDSCAPE && !g_inLiveViewMode) {
-                // Switch to Landscape LiveView
-                g_inLiveViewMode = true;
-                showDashboard(false);
-                g_liveViewStream.start(g_cameraIP);
-                updateUI("LIVE VIEW", g_targetSSID, "[A]: Shoot [B]: Mirror [Dbl B]: Lock");
-            }
-        }
-
         if (g_inLiveViewMode) {
             // Render LiveView Frame directly
             if (g_liveViewStream.hasNewFrame()) {
@@ -392,7 +374,7 @@ void loop()
                 
                 const auto& exp = g_camera.getExposureState();
                 String hudText = " " + exp.iso.currentFormatted + "  " + exp.aperture.currentFormatted + "  " + exp.shutterSpeed.currentFormatted;
-                if (g_liveViewLocked) hudText += " [LOCK]";
+                if (g_liveViewLocked) hudText += " [LV]";
                 if (g_liveViewStream.isMirror()) hudText += " [MIRROR]";
                 M5.Display.drawString(hudText.c_str(), 4, 120);
             }
@@ -449,13 +431,13 @@ void loop()
             // Short press A: Trigger Shutter
             Serial.println("[UI] Triggering Shutter!");
             if (!g_inLiveViewMode) {
-                updateUI("SHUTTER!", "Capturing photo...", "[A]: Shoot [B]: Select");
+                updateUI("SHUTTER!", "Capturing photo...", "[A]: Shoot [B]: Mode");
             }
             bool ok = g_camera.triggerShutter();
             Serial.printf("[Camera] Shutter result: %s\n", ok ? "SUCCESS" : "FAILED");
             delay(150);
             if (!g_inLiveViewMode) {
-                updateUI("READY", g_targetSSID, "[A]: Shoot [B]: Select [Hold B]: Tilt Set");
+                updateUI("READY", g_targetSSID, "[A]: Shoot [B]: Mode [Hold B]: Tilt Set");
             }
         } else if (g_appState == AppState::CAMERA_ADJUSTING_PARAM) {
             // Short press A in adjust mode: Confirm and Set value
@@ -471,30 +453,24 @@ void loop()
 
         if (g_appState == AppState::CAMERA_READY) {
             if (isDoubleClick) {
-                // Double-click B: Toggle LiveView Lock
-                g_liveViewLocked = !g_liveViewLocked;
-                Serial.printf("[UI] LiveView Lock Toggled: %s\n", g_liveViewLocked ? "LOCKED" : "UNLOCKED");
-                if (g_liveViewLocked && !g_inLiveViewMode) {
-                    g_inLiveViewMode = true;
-                    showDashboard(false);
-                    g_liveViewStream.start(g_cameraIP);
-                }
-            } else {
-                // Single-click B
+                // Double-click B: Toggle Selfie Mirror in LiveView
                 if (g_inLiveViewMode) {
-                    // Toggle Mirror in LiveView
                     g_liveViewStream.setMirror(!g_liveViewStream.isMirror());
                     Serial.printf("[UI] LiveView Mirror: %d\n", g_liveViewStream.isMirror());
-                } else {
-                    // Cycle parameter selection in Dashboard
-                    if (g_selectedParam == SelectedParam::ISO) g_selectedParam = SelectedParam::APERTURE;
-                    else if (g_selectedParam == SelectedParam::APERTURE) g_selectedParam = SelectedParam::SHUTTER;
-                    else if (g_selectedParam == SelectedParam::SHUTTER) g_selectedParam = SelectedParam::EV;
-                    else g_selectedParam = SelectedParam::ISO;
-
-                    updateParameterCards();
-                    Serial.printf("[UI] Selected Param: %d\n", (int)g_selectedParam);
                 }
+            } else {
+                // Single-click B: Toggle between LiveView and Dashboard!
+                g_inLiveViewMode = !g_inLiveViewMode;
+                if (g_inLiveViewMode) {
+                    showDashboard(false);
+                    g_liveViewStream.start(g_cameraIP);
+                    updateUI("LIVE VIEW", g_targetSSID, "[A]: Shoot [B]: Dash [Dbl B]: Mirror");
+                } else {
+                    g_liveViewStream.stop();
+                    showDashboard(true);
+                    updateUI("READY", g_targetSSID, "[A]: Shoot [B]: LiveView [Hold B]: Tilt Set");
+                }
+                Serial.printf("[UI] Switched to %s mode\n", g_inLiveViewMode ? "LIVEVIEW" : "DASHBOARD");
             }
         } else if (g_appState == AppState::CAMERA_ADJUSTING_PARAM) {
             // Short press B in adjust mode: Cancel
@@ -524,8 +500,9 @@ void loop()
         delay(300);
     }
 
-    // Long press Button B in CAMERA_READY (500ms): Enter IMU Tilt Adjust Mode
+    // Long press Button B in Dashboard (500ms): Enter IMU Tilt Adjust Mode
     if (M5.BtnB.pressedFor(500) && g_appState == AppState::CAMERA_READY && !g_inLiveViewMode) {
+        // Cycle selected parameter first or enter adjust
         enterAdjustMode();
         delay(200); // Debounce trigger
     }
@@ -569,14 +546,18 @@ void loop()
             updateUI("PTP/IP CONNECT", "Handshaking with camera...", "Connecting...");
             
             g_cameraIP = g_wifiManager.getGatewayIP();
-            Serial.printf("[App] WiFi Connected! Gateway IP (Camera): %s\n", g_cameraIP.toString().c_str());
+            if (g_cameraIP == IPAddress(0, 0, 0, 0)) {
+                g_cameraIP = IPAddress(192, 168, 0, 1);
+            }
+            Serial.printf("[App] WiFi Connected! Camera IP: %s\n", g_cameraIP.toString().c_str());
 
             if (g_camera.connect(g_cameraIP, 55740)) {
                 Serial.println("[App] PTP/IP Connected and Session Opened successfully!");
                 g_appState = AppState::CAMERA_READY;
-                g_inLiveViewMode = false;
-                showDashboard(true);
-                updateUI("READY", g_targetSSID, "[A]: Shoot [B]: Select [Hold B]: Tilt Set");
+                g_inLiveViewMode = true;
+                showDashboard(false);
+                g_liveViewStream.start(g_cameraIP);
+                updateUI("LIVE VIEW", g_targetSSID, "[A]: Shoot [B]: Dash [Dbl B]: Mirror");
             } else {
                 Serial.println("[App] PTP/IP Handshake Failed!");
                 updateUI("PTP FAILED", "Press OK on Camera / Retry", "[B]: Retry");

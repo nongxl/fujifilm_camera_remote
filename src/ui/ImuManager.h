@@ -36,12 +36,12 @@ public:
             m_filteredTilt = m_filteredTilt * 0.75f + rawTilt * 0.25f;
 
             // Orientation detection with hysteresis
-            // Vertical (Portrait): |ay| > 0.60G
-            // Horizontal (Landscape): |ay| < 0.40G
+            // Vertical (Portrait): |ay| > 0.78G
+            // Horizontal (Landscape): |ay| < 0.35G
             DeviceOrientation instantOrientation = m_stableOrientation;
-            if (fabs(ay) > 0.60f) {
+            if (fabs(ay) > 0.78f) {
                 instantOrientation = DeviceOrientation::PORTRAIT;
-            } else if (fabs(ay) < 0.40f) {
+            } else if (fabs(ay) < 0.35f) {
                 instantOrientation = DeviceOrientation::LANDSCAPE;
             }
 

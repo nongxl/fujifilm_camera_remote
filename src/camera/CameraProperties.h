@@ -38,29 +38,45 @@ struct ExposureState {
 
 // Helper formatters
 inline String formatAperture(uint32_t val) {
-    if (val == 0) return "Auto";
-    float f = (float)val / 100.0f;
+    if (val == 0 || val == 0xFFFF) return "---";
+    float f = (float)(val & 0xFFFF) / 100.0f;
     return "f/" + String(f, 1);
 }
 
 inline String formatShutter(uint32_t val) {
-    if (val == 0) return "Auto";
-    if (val >= 1000000) {
-        return String(val / 1000000) + "s";
+    if (val == 0 || val == 0xFFFFFFFF) return "----";
+    bool subsecond = (val & 0x80000000) != 0;
+    uint32_t realVal = val & 0x00FFFFFF;
+    if (subsecond) {
+        float speed = (float)realVal / 1000.0f;
+        if (speed >= 10.0f) {
+            return "1/" + String((int)speed) + "s";
+        } else {
+            return "1/" + String(speed, 1) + "s";
+        }
+    } else {
+        float s = (float)realVal / 1000.0f;
+        if (s == 0) return "1s";
+        return String(s, 1) + "s";
     }
-    float s = 1000000.0f / (float)val;
-    return "1/" + String((int)s);
 }
 
 inline String formatISO(uint32_t val) {
-    if (val == 0) return "Auto";
-    return String(val);
+    if (val == 0 || val == 0xFFFFFFFF) return "Auto";
+    bool isAuto = (val & 0x80000000) != 0;
+    uint32_t realVal = val & 0x0000FFFF;
+    if (isAuto) {
+        if (realVal > 0) return "A" + String(realVal);
+        return "Auto";
+    }
+    return String(realVal);
 }
 
 inline String formatEV(int32_t val) {
-    if (val == 0) return "0.0";
-    float ev = (float)val / 1000.0f;
-    return (ev > 0 ? "+" : "") + String(ev, 1);
+    int16_t signedVal = (int16_t)(val & 0xFFFF);
+    if (signedVal == 0) return "0.0 EV";
+    float ev = (float)signedVal / 1000.0f;
+    return (ev > 0 ? "+" : "") + String(ev, 1) + " EV";
 }
 
 #endif // CAMERA_PROPERTIES_H
