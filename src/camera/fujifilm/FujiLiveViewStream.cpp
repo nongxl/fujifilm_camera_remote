@@ -43,8 +43,9 @@ bool FujiLiveViewStream::start(const IPAddress& cameraIp, uint16_t port) {
     m_cameraIp = cameraIp;
     m_port = port;
     m_running = true;
-    m_foundSOI = false;
+    m_hasNewFrame = false;
     m_assembleBuffer.clear();
+    m_frameBuffer.clear();
     m_lastFrameTime = millis();
     m_lastFpsCalcTime = millis();
     m_frameCounter = 0;
@@ -56,7 +57,7 @@ bool FujiLiveViewStream::start(const IPAddress& cameraIp, uint16_t port) {
         return false;
     }
     m_client.setNoDelay(true);
-    m_client.setTimeout(2);
+    m_client.setTimeout(1);
 
     Serial.println("[LiveView] Connected to MJPEG Stream!");
     return true;
@@ -64,7 +65,7 @@ bool FujiLiveViewStream::start(const IPAddress& cameraIp, uint16_t port) {
 
 void FujiLiveViewStream::stop() {
     m_running = false;
-    m_foundSOI = false;
+    m_hasNewFrame = false;
     if (m_client.connected()) {
         m_client.stop();
     }
@@ -82,7 +83,7 @@ void FujiLiveViewStream::update() {
             m_client.stop();
             if (m_client.connect(m_cameraIp, m_port)) {
                 m_client.setNoDelay(true);
-                m_client.setTimeout(2);
+                m_client.setTimeout(1);
                 Serial.println("[LiveView] Reconnected to MJPEG Stream!");
             }
             m_lastFrameTime = millis();
@@ -90,80 +91,49 @@ void FujiLiveViewStream::update() {
         return;
     }
 
-    // High-performance 8KB socket reader & block parser (using heap member buffer)
-    while (m_client.available() > 0) {
-        int n = m_client.read(m_chunk, CHUNK_SIZE);
-        if (n <= 0) break;
+    // Fuji 55742 Framed Protocol Parser:
+    // Packet = [4 bytes total_len] + [14 bytes header (frame_no etc)] + [JPEG payload (0xFF 0xD8 ... 0xFF 0xD9)]
+    while (m_client.available() >= 18) {
+        uint32_t totalLen = 0;
+        int r = m_client.read((uint8_t*)&totalLen, 4);
+        if (r != 4) break;
 
-        int pos = 0;
-        while (pos < n) {
-            if (!m_foundSOI) {
-                // Search for 0xFF 0xD8 (SOI) in chunk
-                bool found = false;
-                for (int i = pos; i < n - 1; ++i) {
-                    if (m_chunk[i] == 0xFF && m_chunk[i+1] == 0xD8) {
-                        m_assembleBuffer.clear();
-                        m_assembleBuffer.push_back(0xFF);
-                        m_assembleBuffer.push_back(0xD8);
-                        pos = i + 2;
-                        m_foundSOI = true;
-                        found = true;
-                        break;
-                    }
-                }
-                if (!found) {
-                    // Check edge byte across chunk boundaries
-                    if (m_assembleBuffer.size() == 1 && m_assembleBuffer[0] == 0xFF && m_chunk[pos] == 0xD8) {
-                        m_assembleBuffer.push_back(0xD8);
-                        pos++;
-                        m_foundSOI = true;
-                    } else {
-                        m_assembleBuffer.clear();
-                        if (m_chunk[n-1] == 0xFF) m_assembleBuffer.push_back(0xFF);
-                        break;
-                    }
-                }
+        // Sanity check packet length (typically 15KB - 45KB for LiveView JPEG)
+        if (totalLen < 18 || totalLen > MAX_FRAME_SIZE) {
+            continue;
+        }
+
+        size_t payloadLen = totalLen - 4;
+        if (m_assembleBuffer.size() < payloadLen) {
+            m_assembleBuffer.resize(payloadLen);
+        }
+
+        // Read remaining payload bytes with short timeout
+        size_t bytesRead = 0;
+        unsigned long startRead = millis();
+        while (bytesRead < payloadLen && (millis() - startRead < 250)) {
+            int avail = m_client.available();
+            if (avail > 0) {
+                int toRead = std::min((size_t)avail, payloadLen - bytesRead);
+                int n = m_client.read(m_assembleBuffer.data() + bytesRead, toRead);
+                if (n > 0) bytesRead += n;
             } else {
-                // We have SOI, search for EOI (0xFF 0xD9)
-                int eoiPos = -1;
-                for (int i = pos; i < n - 1; ++i) {
-                    if (m_chunk[i] == 0xFF && m_chunk[i+1] == 0xD9) {
-                        eoiPos = i;
-                        break;
-                    }
-                }
+                delay(1);
+            }
+        }
 
-                if (eoiPos >= 0) {
-                    // Append up to EOI
-                    m_assembleBuffer.insert(m_assembleBuffer.end(), m_chunk + pos, m_chunk + eoiPos + 2);
-                    pos = eoiPos + 2;
+        if (bytesRead == payloadLen && payloadLen > 14) {
+            // Extract JPEG (skip first 14 bytes Fuji stream header)
+            m_frameBuffer.assign(m_assembleBuffer.begin() + 14, m_assembleBuffer.begin() + payloadLen);
+            m_hasNewFrame = true;
+            m_lastFrameTime = millis();
+            m_frameCounter++;
 
-                    // Full Frame Completed!
-                    m_frameBuffer = m_assembleBuffer;
-                    m_hasNewFrame = true;
-                    m_lastFrameTime = millis();
-                    m_frameCounter++;
-
-                    // Calculate FPS every 1 second
-                    if (millis() - m_lastFpsCalcTime >= 1000) {
-                        m_currentFps = (float)m_frameCounter * 1000.0f / (float)(millis() - m_lastFpsCalcTime);
-                        m_frameCounter = 0;
-                        m_lastFpsCalcTime = millis();
-                    }
-
-                    // Reset assembler for next frame
-                    m_assembleBuffer.clear();
-                    m_foundSOI = false;
-                } else {
-                    // No EOI in this chunk, append entire remaining chunk
-                    m_assembleBuffer.insert(m_assembleBuffer.end(), m_chunk + pos, m_chunk + n);
-                    pos = n;
-
-                    if (m_assembleBuffer.size() > MAX_FRAME_SIZE) {
-                        m_assembleBuffer.clear();
-                        m_foundSOI = false;
-                    }
-                }
+            // Calculate FPS every 1 second
+            if (millis() - m_lastFpsCalcTime >= 1000) {
+                m_currentFps = (float)m_frameCounter * 1000.0f / (float)(millis() - m_lastFpsCalcTime);
+                m_frameCounter = 0;
+                m_lastFpsCalcTime = millis();
             }
         }
     }
@@ -182,7 +152,7 @@ bool FujiLiveViewStream::render(M5GFX& display, int x, int y, int w, int h) {
 
     // Use 1/4 hardware integer IDCT scale (0.25f)
     // 640x424 (3:2) -> 160x106, 640x480 (4:3) -> 160x120
-    // This executes in only ~6ms via pure IDCT and bypasses the slow affine resampler!
+    // Executes in ~6ms via pure IDCT and bypasses the slow affine resampler!
     const float scale = 0.25f;
     int scaledW = imgW / 4;
     int scaledH = imgH / 4;
