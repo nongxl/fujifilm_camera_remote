@@ -61,6 +61,12 @@ bool PtpIpClient::sendPacket(uint32_t type, const uint8_t* payload, size_t paylo
         memcpy(buffer.data() + sizeof(header), payload, payloadLen);
     }
 
+    Serial.print("[PTP/IP] Sending Packet HEX: ");
+    for (size_t i = 0; i < totalLen; i++) {
+        Serial.printf("%02X ", buffer[i]);
+    }
+    Serial.println();
+
     if (m_client.write(buffer.data(), totalLen) != totalLen) {
         Serial.println("[PTP/IP] Failed to write complete packet to socket");
         return false;
