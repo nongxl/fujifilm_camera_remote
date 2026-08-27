@@ -32,6 +32,17 @@ void WifiManager::connectTo(const String& ssid, const String& password) {
     m_connectStartTime = millis();
 }
 
+void WifiManager::connectFast(const String& ssid, uint8_t channel, const uint8_t* bssid, const String& password) {
+    setState(WifiState::CONNECTING, "Fast connecting to " + ssid);
+    WiFi.disconnect();
+    if (bssid) {
+        WiFi.begin(ssid.c_str(), password.c_str(), (int32_t)channel, bssid, true);
+    } else {
+        WiFi.begin(ssid.c_str(), password.c_str(), (int32_t)channel, nullptr, true);
+    }
+    m_connectStartTime = millis();
+}
+
 void WifiManager::disconnect() {
     WiFi.disconnect();
     setState(WifiState::DISCONNECTED, "Disconnected");
@@ -54,6 +65,9 @@ void WifiManager::update() {
                 ap.ssid = WiFi.SSID(i);
                 ap.rssi = WiFi.RSSI(i);
                 ap.encryptionType = WiFi.encryptionType(i);
+                ap.channel = WiFi.channel(i);
+                uint8_t* b = WiFi.BSSID(i);
+                if (b) memcpy(ap.bssid, b, 6);
                 ap.isFujiCamera = ap.ssid.startsWith("FUJIFILM-");
                 m_scannedAPs.push_back(ap);
             }

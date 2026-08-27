@@ -21,6 +21,8 @@ struct ScannedAP {
     int32_t rssi;
     uint8_t encryptionType;
     bool isFujiCamera;
+    uint8_t channel = 1;
+    uint8_t bssid[6] = {0};
 };
 
 class WifiManager {
@@ -38,6 +40,7 @@ public:
     const std::vector<ScannedAP>& getScannedAPs() const { return m_scannedAPs; }
 
     void connectTo(const String& ssid, const String& password = "");
+    void connectFast(const String& ssid, uint8_t channel, const uint8_t* bssid = nullptr, const String& password = "");
     void disconnect();
 
     bool isConnected() const { return WiFi.status() == WL_CONNECTED; }
