@@ -466,6 +466,7 @@ void loop()
                 g_inLiveViewMode = !g_inLiveViewMode;
                 if (g_inLiveViewMode) {
                     showDashboard(false);
+                    M5.Display.fillScreen(TFT_BLACK);
                     g_liveViewStream.start(g_cameraIP);
                     updateUI("LIVE VIEW", g_targetSSID, "[A]: Shoot [B]: Dash [Dbl B]: Mirror");
                 } else {
@@ -559,6 +560,7 @@ void loop()
                 g_appState = AppState::CAMERA_READY;
                 g_inLiveViewMode = true;
                 showDashboard(false);
+                M5.Display.fillScreen(TFT_BLACK);
                 g_liveViewStream.start(g_cameraIP);
                 updateUI("LIVE VIEW", g_targetSSID, "[A]: Shoot [B]: Dash [Dbl B]: Mirror");
             } else {
