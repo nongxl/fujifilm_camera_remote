@@ -1,4 +1,6 @@
-doc/
+# 第三方参考工程
+doc/*/
+!doc/*.md
 prompt/
 prompt.txt
 .pio
