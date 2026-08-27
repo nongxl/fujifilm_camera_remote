@@ -49,19 +49,23 @@ bool PtpIpClient::sendPacket(uint32_t type, const uint8_t* payload, size_t paylo
     if (!isConnected()) return false;
 
     uint32_t totalLen = sizeof(PtpIpHeader) + payloadLen;
+    std::vector<uint8_t> buffer(totalLen);
+    
     PtpIpHeader header;
     header.length = totalLen;
     header.type = type;
+    
+    memcpy(buffer.data(), &header, sizeof(header));
+    
+    if (payloadLen > 0 && payload != nullptr) {
+        memcpy(buffer.data() + sizeof(header), payload, payloadLen);
+    }
 
-    if (m_client.write((const uint8_t*)&header, sizeof(header)) != sizeof(header)) {
+    if (m_client.write(buffer.data(), totalLen) != totalLen) {
+        Serial.println("[PTP/IP] Failed to write complete packet to socket");
         return false;
     }
-
-    if (payloadLen > 0 && payload != nullptr) {
-        if (m_client.write(payload, payloadLen) != payloadLen) {
-            return false;
-        }
-    }
+    
     return true;
 }
 
