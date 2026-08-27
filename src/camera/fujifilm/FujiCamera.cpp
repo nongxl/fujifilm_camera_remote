@@ -1,4 +1,10 @@
 #include "FujiCamera.h"
+#include <WiFiClient.h>
+
+// Fuji port definitions (from fujiptp.h)
+#define FUJI_CMD_IP_PORT      55740
+#define FUJI_EVENT_IP_PORT    55741
+#define FUJI_LIVEVIEW_IP_PORT 55742
 
 FujiCamera::FujiCamera() {
     // Populate standard photographic exposure steps
@@ -87,7 +93,21 @@ bool FujiCamera::connect(const IPAddress& ip, uint16_t port) {
     }
     Serial.println("[FujiCamera] Init Command Request ACKed!");
 
-    // 3. Open PTP Session
+    // 3. Open Event Connection (required by Fuji before operations)
+    Serial.println("[FujiCamera] Opening Event Connection...");
+    if (!openEventConnection(ip, FUJI_EVENT_IP_PORT)) {
+        Serial.println("[FujiCamera] Event connection failed, trying command port...");
+        // Some Fuji cameras use same port for events
+        if (!openEventConnection(ip, FUJI_CMD_IP_PORT)) {
+            Serial.println("[FujiCamera] Event connection failed on all ports!");
+            m_ptp.disconnect();
+            m_status = CameraStatus::ERROR_STATE;
+            return false;
+        }
+    }
+    Serial.println("[FujiCamera] Event Connection established!");
+
+    // 4. Open PTP Session
     Serial.println("[FujiCamera] Sending Open Session (SessionID = 1)...");
     if (!m_ptp.sendOpenSession(1)) {
         Serial.println("[FujiCamera] Open Session failed!");
@@ -280,4 +300,99 @@ void FujiCamera::update() {
         m_lastPropertySync = millis();
         syncProperties();
     }
+}
+
+bool FujiCamera::openEventConnection(const IPAddress& ip, uint16_t port) {
+    Serial.printf("[FujiCamera] Connecting Event TCP to %s:%u...\n", ip.toString().c_str(), port);
+    
+    m_eventClient.setTimeout(5);
+    if (!m_eventClient.connect(ip, port, 5000)) {
+        Serial.printf("[FujiCamera] Event TCP connection failed to %s:%u\n", ip.toString().c_str(), port);
+        return false;
+    }
+    Serial.printf("[FujiCamera] Event TCP connected to %s:%u\n", ip.toString().c_str(), port);
+
+    // Build Init_Event_Request packet
+    // Standard PTP/IP: [length:4][type:4=3][connectionNumber:4] = 12 bytes total
+    // But Fuji may expect the same proprietary format...
+    // Try standard format first (simpler)
+    uint32_t connNum = m_ptp.getConnectionNumber();
+    
+    // Packet: [length:4][type:4][connectionNumber:4]
+    uint32_t pktLen = 12;
+    uint32_t pktType = PTP_PKT_INIT_EVENT_REQ;  // type = 3
+    
+    Serial.printf("[FujiCamera] Sending Init_Event_Request (connNum=0x%08X)...\n", connNum);
+    
+    if (m_eventClient.write((const uint8_t*)&pktLen, 4) != 4 ||
+        m_eventClient.write((const uint8_t*)&pktType, 4) != 4 ||
+        m_eventClient.write((const uint8_t*)&connNum, 4) != 4) {
+        Serial.println("[FujiCamera] Failed to send Init_Event_Request!");
+        m_eventClient.stop();
+        return false;
+    }
+
+    // Read response header (8 bytes: length + type)
+    uint8_t respHeader[8] = {0};
+    size_t totalRead = 0;
+    unsigned long start = millis();
+    while (totalRead < 8) {
+        if (millis() - start > 10000) {
+            Serial.printf("[FujiCamera] Event response timeout! Read %u of 8 bytes\n", (unsigned)totalRead);
+            m_eventClient.stop();
+            return false;
+        }
+        int avail = m_eventClient.available();
+        if (avail > 0) {
+            int n = m_eventClient.read(respHeader + totalRead, std::min((size_t)avail, 8 - totalRead));
+            if (n > 0) totalRead += n;
+        } else if (!m_eventClient.connected()) {
+            Serial.println("[FujiCamera] Event client disconnected while reading!");
+            return false;
+        } else {
+            delay(10);
+        }
+    }
+    
+    uint32_t respLen = 0, respType = 0;
+    memcpy(&respLen, respHeader, 4);
+    memcpy(&respType, respHeader + 4, 4);
+    
+    Serial.printf("[FujiCamera] Event response: len=%u, type=%u\n", respLen, respType);
+    
+    // Read remaining payload if any
+    if (respLen > 8) {
+        size_t payloadLen = respLen - 8;
+        std::vector<uint8_t> payload(payloadLen);
+        totalRead = 0;
+        start = millis();
+        while (totalRead < payloadLen) {
+            if (millis() - start > 5000) break;
+            int avail = m_eventClient.available();
+            if (avail > 0) {
+                int n = m_eventClient.read(payload.data() + totalRead, std::min((size_t)avail, payloadLen - totalRead));
+                if (n > 0) totalRead += n;
+            } else {
+                delay(10);
+            }
+        }
+        Serial.print("[FujiCamera] Event payload hex: ");
+        for (size_t i = 0; i < totalRead && i < 20; ++i) {
+            Serial.printf("%02X ", payload[i]);
+        }
+        Serial.println();
+    }
+    
+    if (respType == PTP_PKT_INIT_EVENT_ACK) {
+        Serial.println("[FujiCamera] Init_Event_Request ACCEPTED!");
+        return true;
+    } else if (respType == PTP_PKT_INIT_FAIL) {
+        Serial.println("[FujiCamera] Init_Event_Request REJECTED!");
+        m_eventClient.stop();
+        return false;
+    }
+    
+    Serial.printf("[FujiCamera] Unexpected event response type=%u\n", respType);
+    // Keep connection open even for unexpected type - might still work
+    return true;
 }

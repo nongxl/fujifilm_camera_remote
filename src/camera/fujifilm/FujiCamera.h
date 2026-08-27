@@ -31,7 +31,10 @@ public:
     void update() override;
 
 private:
+    bool openEventConnection(const IPAddress& ip, uint16_t port);
+    
     PtpIpClient m_ptp;
+    WiFiClient m_eventClient;
     CameraStatus m_status = CameraStatus::DISCONNECTED;
     String m_modelName = "Fuji Camera";
     ExposureState m_exposureState;
