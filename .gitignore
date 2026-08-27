@@ -1,0 +1,16 @@
+doc/
+prompt/
+prompt.txt
+.pio
+.vscode
+implementation_plan.md
+# 敏感信息存储文件
+src/secrets.h
+
+# 临时开发与抓包沙盒
+scratch/
+
+# SD卡本地配置文件
+**/config.json
+**/wifi.json
+
