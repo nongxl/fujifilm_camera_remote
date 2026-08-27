@@ -93,12 +93,12 @@ enum PtpRespCode : uint16_t {
     PTP_RC_SpecificationOfDestinationUnsupported = 0x2020
 };
 
-// Data Phase flags for Operation Request (ISO 15740 / PTP/IP)
+// Data Phase flags for Operation Request (Fuji proprietary behavior based on libpict)
 enum PtpDataPhase : uint32_t {
     PTP_DATA_PHASE_UNKNOWN = 1,
-    PTP_DATA_PHASE_NONE    = 2, // No data or Data In phase
-    PTP_DATA_PHASE_IN      = 2, // Same as NONE (Initiator to Responder data phase will not occur)
-    PTP_DATA_PHASE_OUT     = 3  // Client to device (Data Out phase will occur)
+    PTP_DATA_PHASE_NONE    = 1, // Fuji expects 1 when there is no data phase
+    PTP_DATA_PHASE_IN      = 2, // Fuji expects 2 for any data phase
+    PTP_DATA_PHASE_OUT     = 2  // Fuji expects 2 for any data phase
 };
 
 #pragma pack(push, 1)
