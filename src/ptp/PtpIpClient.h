@@ -17,6 +17,7 @@ public:
 
     // High level commands
     bool sendInitCommandRequest(const String& clientName = "M5StickS3");
+    bool sendFujiInitCommandRequest(const String& clientName = "HackedClient");
     bool sendOpenSession(uint32_t sessionId = 1);
     bool sendCloseSession();
 

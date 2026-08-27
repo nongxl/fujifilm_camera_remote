@@ -76,13 +76,9 @@ bool FujiCamera::connect(const IPAddress& ip, uint16_t port) {
         return false;
     }
 
-    // 2. PTP/IP Init Command Request
-    Serial.println("[FujiCamera] Sending Init Command Request (Name: 'FUJIFILM Camera Remote')...");
-    bool initOk = m_ptp.sendInitCommandRequest("FUJIFILM Camera Remote");
-    if (!initOk) {
-        Serial.println("[FujiCamera] Retrying Init Command Request with name 'HackedClient'...");
-        initOk = m_ptp.sendInitCommandRequest("HackedClient");
-    }
+    // 2. Fuji PTP/IP Init Command Request (proprietary format)
+    Serial.println("[FujiCamera] Sending Fuji Init Command Request...");
+    bool initOk = m_ptp.sendFujiInitCommandRequest("HackedClient");
     if (!initOk) {
         Serial.println("[FujiCamera] Init Command Request failed!");
         m_ptp.disconnect();

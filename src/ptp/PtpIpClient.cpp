@@ -182,6 +182,96 @@ bool PtpIpClient::sendInitCommandRequest(const String& clientName) {
     return true;
 }
 
+bool PtpIpClient::sendFujiInitCommandRequest(const String& clientName) {
+    // Fuji cameras use a PROPRIETARY init packet format (from libfuji):
+    // Total packet: exactly 0x52 (82) bytes
+    // Layout: [length:4][type:4][version:4][guid:16][device_name:54]
+    // This is DIFFERENT from standard PTP/IP which uses: [guid][name][version]
+    
+    const uint32_t FUJI_TOTAL_PACKET_SIZE = 0x52; // 82 bytes
+    const uint32_t FUJI_PAYLOAD_SIZE = FUJI_TOTAL_PACKET_SIZE - sizeof(PtpIpHeader); // 74 bytes
+    const uint32_t FUJI_PROTOCOL_VERSION = 0x8f53e4f2;
+    
+    std::vector<uint8_t> payload(FUJI_PAYLOAD_SIZE, 0); // Zero-fill
+
+    // 1. Protocol Version (4 bytes) - FIRST in Fuji format (not last!)
+    uint32_t version = FUJI_PROTOCOL_VERSION;
+    memcpy(payload.data(), &version, 4);
+
+    // 2. GUID (16 bytes, split as 4x uint32_t)
+    memcpy(payload.data() + 4, m_guid, 16);
+
+    // 3. Device Name (UTF-16LE, remaining 54 bytes, zero-padded)
+    size_t nameOffset = 20; // 4 (version) + 16 (guid)
+    size_t maxNameBytes = FUJI_PAYLOAD_SIZE - nameOffset; // 54 bytes = 27 UTF-16 chars
+    for (size_t i = 0; i < clientName.length() && (nameOffset + 2) <= FUJI_PAYLOAD_SIZE; ++i) {
+        payload[nameOffset++] = (uint8_t)clientName[i];
+        payload[nameOffset++] = 0; // High byte for ASCII -> UTF-16LE
+    }
+    // Null terminator already present from zero-fill
+
+    Serial.printf("[PTP/IP] Sending FUJI InitCommandReq (total=%u, payload=%u, version=0x%08X, name='%s')...\n",
+                  FUJI_TOTAL_PACKET_SIZE, FUJI_PAYLOAD_SIZE, FUJI_PROTOCOL_VERSION, clientName.c_str());
+
+    // Hex dump first 40 bytes of payload for debug
+    Serial.print("[PTP/IP] Payload hex: ");
+    for (size_t i = 0; i < 40 && i < payload.size(); ++i) {
+        Serial.printf("%02X ", payload[i]);
+    }
+    Serial.println("...");
+
+    if (!sendPacket(PTP_PKT_INIT_CMD_REQ, payload.data(), payload.size())) {
+        Serial.println("[PTP/IP] sendPacket failed for Fuji InitCommandReq!");
+        return false;
+    }
+
+    // Wait for response with 15s timeout (Fuji cameras can be slow)
+    uint32_t respType = 0;
+    std::vector<uint8_t> respPayload;
+    if (!readPacket(respType, respPayload, 15000)) {
+        Serial.println("[PTP/IP] Failed to read Fuji InitCommandAck response!");
+        return false;
+    }
+
+    Serial.printf("[PTP/IP] Fuji response type=%u, payloadSize=%u\n", respType, (unsigned)respPayload.size());
+
+    if (respPayload.size() >= 4) {
+        uint32_t code = 0;
+        memcpy(&code, respPayload.data(), 4);
+        Serial.printf("[PTP/IP] Response Code/Value = 0x%08X\n", code);
+    }
+
+    // Hex dump response payload
+    if (respPayload.size() > 0) {
+        Serial.print("[PTP/IP] Response hex: ");
+        for (size_t i = 0; i < respPayload.size() && i < 60; ++i) {
+            Serial.printf("%02X ", respPayload[i]);
+        }
+        Serial.println();
+    }
+
+    if (respType == PTP_PKT_INIT_FAIL) {
+        uint32_t reason = 0;
+        if (respPayload.size() >= 4) memcpy(&reason, respPayload.data(), 4);
+        Serial.printf("[PTP/IP] Fuji Init REJECTED (reason: 0x%08X)!\n", reason);
+        return false;
+    }
+
+    if (respType != PTP_PKT_INIT_CMD_ACK) {
+        Serial.printf("[PTP/IP] Unexpected Fuji response type=%u\n", respType);
+        return false;
+    }
+
+    // Extract Connection Number from Fuji ACK
+    if (respPayload.size() >= 4) {
+        memcpy(&m_connectionNumber, respPayload.data(), 4);
+        Serial.printf("[PTP/IP] Fuji Connection Number = 0x%08X\n", m_connectionNumber);
+    }
+    
+    Serial.println("[PTP/IP] Fuji Init Command ACCEPTED!");
+    return true;
+}
+
 bool PtpIpClient::sendOpenSession(uint32_t sessionId) {
     std::vector<uint32_t> params = { sessionId };
     uint16_t respCode = 0;
