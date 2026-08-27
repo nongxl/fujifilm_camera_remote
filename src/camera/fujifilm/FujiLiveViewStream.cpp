@@ -1,5 +1,34 @@
 #include "FujiLiveViewStream.h"
 
+namespace {
+static bool readJpegDimensions(const uint8_t* data, size_t len, int& outW, int& outH) {
+    outW = 0;
+    outH = 0;
+    if (!data || len < 4 || data[0] != 0xFF || data[1] != 0xD8) return false;
+    
+    size_t i = 2;
+    while (i + 8 < len) {
+        if (data[i] != 0xFF) { 
+            i++; 
+            continue; 
+        }
+        uint8_t marker = data[i + 1];
+        // SOF0, SOF1, SOF2 markers containing image dimensions
+        if (marker == 0xC0 || marker == 0xC1 || marker == 0xC2) {
+            outH = (data[i + 5] << 8) | data[i + 6];
+            outW = (data[i + 7] << 8) | data[i + 8];
+            return (outW > 0 && outH > 0);
+        }
+        if (marker == 0xD9 || marker == 0xDA) break; // EOI or Start of Scan
+        if (i + 3 >= len) break;
+        uint16_t blockLen = (data[i + 2] << 8) | data[i + 3];
+        if (blockLen < 2) break;
+        i += 2 + blockLen;
+    }
+    return false;
+}
+} // anonymous namespace
+
 FujiLiveViewStream::FujiLiveViewStream() {
     m_assembleBuffer.reserve(65536);
     m_frameBuffer.reserve(65536);
@@ -144,7 +173,32 @@ void FujiLiveViewStream::update() {
 bool FujiLiveViewStream::render(M5GFX& display, int x, int y, int w, int h) {
     if (m_frameBuffer.empty()) return false;
 
-    // Draw JPEG using M5GFX hardware-accelerated decoder
-    bool ok = display.drawJpg(m_frameBuffer.data(), m_frameBuffer.size(), x, y, w, h);
-    return ok;
+    // Detect actual JPEG resolution from camera stream
+    int imgW = 0, imgH = 0;
+    readJpegDimensions(m_frameBuffer.data(), m_frameBuffer.size(), imgW, imgH);
+    if (imgW <= 0 || imgH <= 0) {
+        imgW = 640;
+        imgH = 480;
+    }
+
+    // Scale so the full field-of-view width fits into 'w' (240px)
+    float scale = (float)w / (float)imgW; // e.g. 240.0 / 640.0 = 0.375
+    int scaledH = (int)((float)imgH * scale); // e.g. 480 * 0.375 = 180, or 424 * 0.375 = 159
+
+    // Center crop vertically if scaled height exceeds target height 'h'
+    int offY_px = 0;
+    if (scaledH > h) {
+        offY_px = (scaledH - h) / 2;
+    }
+    int offY_src = (int)((float)offY_px / scale);
+
+    // Draw using hardware-accelerated M5GFX with auto scaling and boundary clipping
+    return display.drawJpg(
+        m_frameBuffer.data(),
+        m_frameBuffer.size(),
+        x, y,
+        w, h,
+        0, offY_src,
+        scale, scale
+    );
 }

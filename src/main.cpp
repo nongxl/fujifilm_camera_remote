@@ -362,21 +362,24 @@ void loop()
 
     if (g_appState == AppState::CAMERA_READY) {
         if (g_inLiveViewMode) {
-            // Render LiveView Frame directly
+            // Render LiveView Frame strictly into y = 0..114 (height 115, 0..114)
             if (g_liveViewStream.hasNewFrame()) {
-                g_liveViewStream.render(M5.Display, 0, 0, 240, 135);
+                g_liveViewStream.render(M5.Display, 0, 0, 240, 115);
                 g_liveViewStream.clearNewFrame();
 
-                // Draw semi-transparent OSD HUD bar at bottom
-                M5.Display.fillRect(0, 115, 240, 20, M5.Display.color565(20, 20, 20));
-                M5.Display.setTextColor(TFT_GREEN, M5.Display.color565(20, 20, 20));
-                M5.Display.setTextSize(1);
-                
+                // Draw solid, flicker-free HUD status bar at bottom (y = 115..134)
                 const auto& exp = g_camera.getExposureState();
-                String hudText = " " + exp.iso.currentFormatted + "  " + exp.aperture.currentFormatted + "  " + exp.shutterSpeed.currentFormatted;
-                if (g_liveViewLocked) hudText += " [LV]";
-                if (g_liveViewStream.isMirror()) hudText += " [MIRROR]";
-                M5.Display.drawString(hudText.c_str(), 4, 120);
+                String hudText = " ISO " + exp.iso.currentFormatted + "  |  " + exp.aperture.currentFormatted + "  |  " + exp.shutterSpeed.currentFormatted;
+                if (g_liveViewStream.isMirror()) hudText += "  [M]";
+
+                static String s_lastHudText = "";
+                if (hudText != s_lastHudText) {
+                    s_lastHudText = hudText;
+                    M5.Display.fillRect(0, 115, 240, 20, M5.Display.color565(12, 12, 16));
+                    M5.Display.setTextColor(TFT_GREEN, M5.Display.color565(12, 12, 16));
+                    M5.Display.setTextDatum(datum_t::middle_center);
+                    M5.Display.drawString(hudText.c_str(), 120, 125);
+                }
             }
         } else {
             updateParameterCards();
