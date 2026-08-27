@@ -158,3 +158,15 @@ pio device monitor -b 115200
 - [x] **UI 优化**: 横屏 (240×135) 适配与 2×2 参数仪表盘高亮交互。
 - [ ] **阶段 4**: TCP 55742 MJPEG 实时取景解码渲染与小屏幕高帧率刷新优化。
 - [ ] **阶段 5**: `CameraDevice` 多品牌扩展（索尼/佳能/松下等）与蓝牙 BLE 低功耗唤醒。
+
+---
+
+## 🙏 致谢与参考开源项目 (Acknowledgements & References)
+
+本项目在逆向分析、协议解析与硬件架构设计过程中，深受以下开源项目的启发与帮助，特此致敬：
+
+*   **[hkr/fuji-cam-wifi-tool](https://github.com/hkr/fuji-cam-wifi-tool)**: 极其出色的富士相机 Wi-Fi 协议逆向工程工具。为本项目破解富士私有 12 字节 PTP 报文头、7 步状态机握手序列、两段式参数修改（`0x1016`）及端口体系提供了决定性的关键线索。
+*   **[petabyt/libfuji](https://github.com/petabyt/libfuji) & [petabyt/libpict](https://github.com/petabyt/libpict)**: 优秀的跨平台富士相机 PTP 协议通信库，提供了初始 82 字节 Magic 握手包结构与底层通信时序的重要参考。
+*   **[akpm/furble](https://github.com/akpm/furble)**: 优秀的嵌入式无线相机遥控器项目，在硬件选型、交互设计及嵌入式低功耗控制方面为本项目提供了极具价值的设计灵感。
+*   **[M5Unified](https://github.com/m5stack/M5Unified)**: M5Stack 官方统一硬件驱动层，为屏幕渲染与按键交互提供了坚实稳定的底座。
+*   **[LVGL](https://github.com/lvgl/lvgl)**: 强大的开源轻量级嵌入式图形库。
