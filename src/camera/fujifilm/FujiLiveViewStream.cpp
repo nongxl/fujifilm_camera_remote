@@ -31,8 +31,8 @@ bool FujiLiveViewStream::ensureDecoder() {
     if (m_jpeg == nullptr) {
         jpeg_dec_config_t config = DEFAULT_JPEG_DEC_CONFIG();
         config.output_type = JPEG_PIXEL_FORMAT_RGB565_BE;
-        config.scale.width = JPEG_DECODE_WIDTH;  // 216
-        config.scale.height = JPEG_DECODE_HEIGHT; // 144
+        config.scale.width = JPEG_DECODE_WIDTH;   // 320
+        config.scale.height = JPEG_DECODE_HEIGHT; // 240
 
         const jpeg_error_t rc = jpeg_dec_open(&config, &m_jpeg);
         if (rc != JPEG_ERR_OK || m_jpeg == nullptr) {
@@ -217,10 +217,20 @@ void FujiLiveViewStream::update() {
             }
 
             if (m_payloadBytesRead >= m_expectedPayloadLen) {
-                // Completed one full JPEG frame!
-                if (m_expectedPayloadLen > 14) {
+                // Completed one full packet! Find exact JPEG SOI marker (0xFF 0xD8)
+                size_t soiPos = 0;
+                bool foundSoi = false;
+                for (size_t i = 0; i + 1 < m_expectedPayloadLen && i < 64; ++i) {
+                    if (m_assembleBuffer[i] == 0xFF && m_assembleBuffer[i+1] == 0xD8) {
+                        soiPos = i;
+                        foundSoi = true;
+                        break;
+                    }
+                }
+
+                if (foundSoi && m_expectedPayloadLen > soiPos + 100) {
                     m_frameBuffer.assign(
-                        m_assembleBuffer.begin() + 14,
+                        m_assembleBuffer.begin() + soiPos,
                         m_assembleBuffer.begin() + m_expectedPayloadLen
                     );
                     m_hasNewFrame = true;
@@ -255,31 +265,38 @@ bool FujiLiveViewStream::render(M5GFX& display, const String& expText) {
 
     jpeg_error_t rc = jpeg_dec_parse_header(m_jpeg, &io, &outInfo);
     if (rc != JPEG_ERR_OK) {
+        Serial.printf("[JPEG] Parse header failed: %d (bufLen=%d)\n", (int)rc, (int)m_frameBuffer.size());
+        return false;
+    }
+
+    int outLength = 0;
+    rc = jpeg_dec_get_outbuf_len(m_jpeg, &outLength);
+    if (rc != JPEG_ERR_OK || outLength <= 0 || (size_t)outLength > m_jpegOutputCapacity) {
+        Serial.printf("[JPEG] Invalid outbuf len: %d (rc=%d, cap=%u)\n", outLength, (int)rc, (unsigned)m_jpegOutputCapacity);
         return false;
     }
 
     io.outbuf = m_jpegOutputBuffer;
     rc = jpeg_dec_process(m_jpeg, &io);
     if (rc != JPEG_ERR_OK) {
+        Serial.printf("[JPEG] Process failed: %d\n", (int)rc);
         return false;
     }
 
-    // Hardware SIMD decoded dimensions (216 x 144 for 3:2 camera feed)
+    // Hardware SIMD decoded dimensions (320 x 240 for 640x480 camera stream)
     const int decW = outInfo.width > 0 ? outInfo.width : JPEG_DECODE_WIDTH;
     const int decH = outInfo.height > 0 ? outInfo.height : JPEG_DECODE_HEIGHT;
 
-    // Center-crop 216x144 into 216x135 on 240x135 canvas
-    const int visibleW = std::min(decW, 240); // 216
-    const int visibleH = std::min(decH, 135); // 135
-    const int cropX = (decW - visibleW) / 2; // 0
-    const int cropY = (decH - visibleH) / 2; // (144 - 135) / 2 = 4 rows (removes 4:3 letterbox padding!)
-    const int drawX = (240 - visibleW) / 2; // (240 - 216) / 2 = 12px
-    const int drawY = (135 - visibleH) / 2; // 0
+    // Center-crop 320x240 into 240x135 on double-buffering canvas
+    // Fills 100% of height and center-crops width cleanly
+    const int visibleW = std::min(decW, 240); // 240
+    const int visibleH = 135;
+    const int cropX = (decW - visibleW) / 2; // (320 - 240) / 2 = 40
+    const int cropY = (decH - visibleH) / 2; // (240 - 135) / 2 = 52
+    const int drawX = (240 - visibleW) / 2; // 0
+    const int drawY = 0;
 
     const uint16_t* pixels = reinterpret_cast<const uint16_t*>(m_jpegOutputBuffer);
-
-    // Clear left and right side pillars
-    m_canvas.fillRect(0, 0, 240, 135, TFT_BLACK);
 
     // Blit hardware decoded rows into double-buffering canvas
     if (!m_mirror) {

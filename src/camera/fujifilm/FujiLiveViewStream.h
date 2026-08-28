@@ -72,8 +72,8 @@ private:
 
     static constexpr size_t MAX_FRAME_SIZE = 131072; // 128KB max per JPEG frame
     static constexpr unsigned long STREAM_WATCHDOG_MS = 3000;
-    static constexpr uint16_t JPEG_DECODE_WIDTH = 216;
-    static constexpr uint16_t JPEG_DECODE_HEIGHT = 144;
+    static constexpr uint16_t JPEG_DECODE_WIDTH = 320;
+    static constexpr uint16_t JPEG_DECODE_HEIGHT = 240;
 };
 
 #endif // FUJI_LIVE_VIEW_STREAM_H
