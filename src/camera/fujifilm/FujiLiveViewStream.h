@@ -5,6 +5,7 @@
 #include <WiFiClient.h>
 #include <vector>
 #include <M5Unified.h>
+#include <esp_jpeg_dec.h>
 
 class FujiLiveViewStream {
 public:
@@ -20,7 +21,7 @@ public:
     bool hasNewFrame() const { return m_hasNewFrame; }
     void clearNewFrame() { m_hasNewFrame = false; }
 
-    // Render latest frame with full-height 135px and transparent floating OSD (Zero Flicker via Double-Buffered Canvas)
+    // Render latest frame using esp_new_jpeg SIMD hardware decoder with transparent floating OSD
     bool render(M5GFX& display, const String& expText = "");
 
     float getFps() const { return m_currentFps; }
@@ -34,6 +35,8 @@ private:
         WAIT_HEADER,
         READ_PAYLOAD
     };
+
+    bool ensureDecoder();
 
     WiFiClient m_client;
     IPAddress m_cameraIp;
@@ -53,11 +56,12 @@ private:
     std::vector<uint8_t> m_assembleBuffer;
     std::vector<uint8_t> m_frameBuffer;
 
-    // Fast 1/4 IDCT decode sprite (160x106, 33.9KB in SRAM)
-    LGFX_Sprite m_decodeSprite;
-    bool m_decodeSpriteInit = false;
+    // Hardware SIMD JPEG decoder handle and aligned DMA output buffer
+    jpeg_dec_handle_t m_jpeg = nullptr;
+    uint8_t* m_jpegOutputBuffer = nullptr;
+    size_t m_jpegOutputCapacity = 0;
 
-    // Final composition double-buffering canvas (240x135, 64.8KB in internal DMA SRAM)
+    // Final composition double-buffering canvas (240x135, internal DMA SRAM)
     LGFX_Sprite m_canvas;
     bool m_canvasInit = false;
 
@@ -68,6 +72,8 @@ private:
 
     static constexpr size_t MAX_FRAME_SIZE = 131072; // 128KB max per JPEG frame
     static constexpr unsigned long STREAM_WATCHDOG_MS = 3000;
+    static constexpr uint16_t JPEG_DECODE_WIDTH = 216;
+    static constexpr uint16_t JPEG_DECODE_HEIGHT = 144;
 };
 
 #endif // FUJI_LIVE_VIEW_STREAM_H

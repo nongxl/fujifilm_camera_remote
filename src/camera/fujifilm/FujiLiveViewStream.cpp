@@ -3,97 +3,72 @@
 #include <esp_wifi.h>
 #include <lwip/sockets.h>
 #include <lwip/netdb.h>
-
-namespace {
-static bool readJpegDimensions(const uint8_t* data, size_t len, int& outW, int& outH) {
-    outW = 0;
-    outH = 0;
-    if (!data || len < 4 || data[0] != 0xFF || data[1] != 0xD8) return false;
-    
-    size_t i = 2;
-    while (i + 8 < len) {
-        if (data[i] != 0xFF) { 
-            i++; 
-            continue; 
-        }
-        uint8_t marker = data[i + 1];
-        // SOF0, SOF1, SOF2 markers containing image dimensions
-        if (marker == 0xC0 || marker == 0xC1 || marker == 0xC2) {
-            outH = (data[i + 5] << 8) | data[i + 6];
-            outW = (data[i + 7] << 8) | data[i + 8];
-            return (outW > 0 && outH > 0);
-        }
-        if (marker == 0xD9 || marker == 0xDA) break; // EOI or Start of Scan
-        if (i + 3 >= len) break;
-        uint16_t blockLen = (data[i + 2] << 8) | data[i + 3];
-        if (blockLen < 2) break;
-        i += 2 + blockLen;
-    }
-    return false;
-}
-
-// Precomputed look-up tables for ultra-fast (0.4ms) nearest-neighbor scaling
-static uint16_t s_lutX[240];
-static uint16_t s_lutY[135];
-static int s_cachedSrcW = 0, s_cachedSrcH = 0, s_cachedSrcY = 0;
-static int s_cachedDstW = 0, s_cachedDstH = 0;
-
-static void updateLut(int srcW, int srcActiveH, int srcOffsetY, int dstW, int dstH) {
-    if (s_cachedSrcW == srcW && s_cachedSrcH == srcActiveH && s_cachedSrcY == srcOffsetY &&
-        s_cachedDstW == dstW && s_cachedDstH == dstH) {
-        return;
-    }
-    s_cachedSrcW = srcW;
-    s_cachedSrcH = srcActiveH;
-    s_cachedSrcY = srcOffsetY;
-    s_cachedDstW = dstW;
-    s_cachedDstH = dstH;
-
-    for (int x = 0; x < dstW; ++x) {
-        s_lutX[x] = (x * srcW) / dstW;
-    }
-    for (int y = 0; y < dstH; ++y) {
-        s_lutY[y] = srcOffsetY + (y * srcActiveH) / dstH;
-    }
-}
-
-static void fastUpscale(const uint16_t* src, int srcStride, int srcW, int srcActiveH, int srcOffsetY,
-                        uint16_t* dst, int dstStride, int drawX, int dstW, int dstH, bool mirror) {
-    updateLut(srcW, srcActiveH, srcOffsetY, dstW, dstH);
-
-    for (int dy = 0; dy < dstH; ++dy) {
-        int sy = s_lutY[dy];
-        const uint16_t* sRow = src + sy * srcStride;
-        uint16_t* dRow = dst + dy * dstStride + drawX;
-        if (!mirror) {
-            for (int dx = 0; dx < dstW; ++dx) {
-                dRow[dx] = sRow[s_lutX[dx]];
-            }
-        } else {
-            for (int dx = 0; dx < dstW; ++dx) {
-                dRow[dx] = sRow[srcW - 1 - s_lutX[dx]];
-            }
-        }
-    }
-}
-} // anonymous namespace
+#include <esp_heap_caps.h>
 
 FujiLiveViewStream::FujiLiveViewStream() 
-    : m_decodeSprite(&M5.Display), m_canvas(&M5.Display) {
+    : m_canvas(&M5.Display) {
     m_assembleBuffer.reserve(65536);
     m_frameBuffer.reserve(65536);
 }
 
 FujiLiveViewStream::~FujiLiveViewStream() {
     stop();
-    if (m_decodeSpriteInit) {
-        m_decodeSprite.deleteSprite();
-        m_decodeSpriteInit = false;
+    if (m_jpeg != nullptr) {
+        jpeg_dec_close(m_jpeg);
+        m_jpeg = nullptr;
+    }
+    if (m_jpegOutputBuffer != nullptr) {
+        free(m_jpegOutputBuffer);
+        m_jpegOutputBuffer = nullptr;
     }
     if (m_canvasInit) {
         m_canvas.deleteSprite();
         m_canvasInit = false;
     }
+}
+
+bool FujiLiveViewStream::ensureDecoder() {
+    if (m_jpeg == nullptr) {
+        jpeg_dec_config_t config = DEFAULT_JPEG_DEC_CONFIG();
+        config.output_type = JPEG_PIXEL_FORMAT_RGB565_BE;
+        config.scale.width = JPEG_DECODE_WIDTH;  // 216
+        config.scale.height = JPEG_DECODE_HEIGHT; // 144
+
+        const jpeg_error_t rc = jpeg_dec_open(&config, &m_jpeg);
+        if (rc != JPEG_ERR_OK || m_jpeg == nullptr) {
+            Serial.printf("[LiveView] esp_new_jpeg open failed rc=%d\n", (int)rc);
+            m_jpeg = nullptr;
+            return false;
+        }
+    }
+
+    if (m_jpegOutputBuffer == nullptr) {
+        m_jpegOutputCapacity = (size_t)JPEG_DECODE_WIDTH * (size_t)JPEG_DECODE_HEIGHT * 2;
+        m_jpegOutputBuffer = (uint8_t*)heap_caps_aligned_calloc(16, 1, m_jpegOutputCapacity, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+        if (m_jpegOutputBuffer == nullptr && psramFound()) {
+            m_jpegOutputBuffer = (uint8_t*)heap_caps_aligned_calloc(16, 1, m_jpegOutputCapacity, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        }
+        if (m_jpegOutputBuffer == nullptr) {
+            Serial.println("[LiveView] Failed to allocate JPEG output buffer");
+            return false;
+        }
+    }
+
+    // Ensure 240x135 canvas is initialized in internal DMA SRAM
+    if (!m_canvasInit) {
+        m_canvas.setPsram(false);
+        m_canvas.setColorDepth(16);
+        void* ptr = m_canvas.createSprite(240, 135);
+        if (ptr == nullptr && psramFound()) {
+            m_canvas.setPsram(true);
+            m_canvas.createSprite(240, 135);
+        }
+        m_canvasInit = true;
+        m_canvas.setTextSize(1);
+        m_canvas.setTextWrap(false);
+    }
+
+    return true;
 }
 
 bool FujiLiveViewStream::start(const IPAddress& cameraIp, uint16_t port) {
@@ -128,6 +103,7 @@ bool FujiLiveViewStream::start(const IPAddress& cameraIp, uint16_t port) {
         setsockopt(fd, SOL_SOCKET, SO_RCVBUF, &rcvbuf, sizeof(rcvbuf));
     }
 
+    ensureDecoder();
     Serial.println("[LiveView] Connected to MJPEG Stream!");
     return true;
 }
@@ -270,134 +246,60 @@ void FujiLiveViewStream::update() {
 
 bool FujiLiveViewStream::render(M5GFX& display, const String& expText) {
     if (m_frameBuffer.empty()) return false;
+    if (!ensureDecoder()) return false;
 
-    // Detect actual JPEG resolution from camera
-    int imgW = 0, imgH = 0;
-    readJpegDimensions(m_frameBuffer.data(), m_frameBuffer.size(), imgW, imgH);
-    if (imgW <= 0 || imgH <= 0) {
-        imgW = 640;
-        imgH = 480;
+    jpeg_dec_io_t io = {};
+    jpeg_dec_header_info_t outInfo = {};
+    io.inbuf = m_frameBuffer.data();
+    io.inbuf_len = (int)m_frameBuffer.size();
+
+    jpeg_error_t rc = jpeg_dec_parse_header(m_jpeg, &io, &outInfo);
+    if (rc != JPEG_ERR_OK) {
+        return false;
     }
 
-    // 1/4 IDCT hardware decoded dimensions
-    int decW = imgW / 4;
-    int decH = imgH / 4;
-
-    // Ensure 1/4 IDCT decode sprite is initialized in fast internal SRAM
-    if (!m_decodeSpriteInit || m_decodeSprite.width() != decW || m_decodeSprite.height() != decH) {
-        m_decodeSprite.deleteSprite();
-        m_decodeSprite.setPsram(false);
-        m_decodeSprite.setColorDepth(16);
-        m_decodeSprite.createSprite(decW, decH);
-        m_decodeSpriteInit = true;
+    io.outbuf = m_jpegOutputBuffer;
+    rc = jpeg_dec_process(m_jpeg, &io);
+    if (rc != JPEG_ERR_OK) {
+        return false;
     }
 
-    // Ensure 240x135 full screen double-buffering canvas is initialized in internal DMA SRAM
-    if (!m_canvasInit) {
-        m_canvas.setPsram(false);
-        m_canvas.setColorDepth(16);
-        void* ptr = m_canvas.createSprite(240, 135);
-        if (ptr == nullptr && psramFound()) {
-            m_canvas.setPsram(true);
-            m_canvas.createSprite(240, 135);
+    // Hardware SIMD decoded dimensions (216 x 144 for 3:2 camera feed)
+    const int decW = outInfo.width > 0 ? outInfo.width : JPEG_DECODE_WIDTH;
+    const int decH = outInfo.height > 0 ? outInfo.height : JPEG_DECODE_HEIGHT;
+
+    // Center-crop 216x144 into 216x135 on 240x135 canvas
+    const int visibleW = std::min(decW, 240); // 216
+    const int visibleH = std::min(decH, 135); // 135
+    const int cropX = (decW - visibleW) / 2; // 0
+    const int cropY = (decH - visibleH) / 2; // (144 - 135) / 2 = 4 rows (removes 4:3 letterbox padding!)
+    const int drawX = (240 - visibleW) / 2; // (240 - 216) / 2 = 12px
+    const int drawY = (135 - visibleH) / 2; // 0
+
+    const uint16_t* pixels = reinterpret_cast<const uint16_t*>(m_jpegOutputBuffer);
+
+    // Clear left and right side pillars
+    m_canvas.fillRect(0, 0, 240, 135, TFT_BLACK);
+
+    // Blit hardware decoded rows into double-buffering canvas
+    if (!m_mirror) {
+        for (int row = 0; row < visibleH; ++row) {
+            const uint16_t* sRow = pixels + (cropY + row) * decW + cropX;
+            uint16_t* dRow = (uint16_t*)m_canvas.getBuffer() + (drawY + row) * 240 + drawX;
+            memcpy(dRow, sRow, visibleW * sizeof(uint16_t));
         }
-        m_canvasInit = true;
-        m_canvas.setTextSize(1);
-        m_canvas.setTextWrap(false);
-    }
-
-    // Step 1: Pure integer 1/4 IDCT hardware decode into m_decodeSprite (5.5ms)
-    m_decodeSprite.drawJpg(
-        m_frameBuffer.data(),
-        m_frameBuffer.size(),
-        0, 0,
-        decW, decH,
-        0, 0,
-        0.25f, 0.25f
-    );
-
-    // Step 2: Auto-detect active image bounds to remove ANY top/bottom black borders (Letterboxing)
-    // We scan the decoded sprite to find the first and last non-black rows.
-    uint16_t* ptr = (uint16_t*)m_decodeSprite.getBuffer();
-    int activeSrcY = 0;
-    int activeSrcH = decH;
-
-    // Scan top-down to find the first non-black row
-    for (int y = 0; y < decH / 2; ++y) {
-        bool isBlack = true;
-        // Sample middle 50% of the row to avoid edge artifacts
-        for (int x = decW / 4; x < (decW * 3) / 4; ++x) {
-            uint16_t color = ptr[y * decW + x];
-            if (color != 0x0000 && color != 0x0821) { // Not pure black or near-black
-                isBlack = false;
-                break;
+    } else {
+        for (int row = 0; row < visibleH; ++row) {
+            const uint16_t* sRow = pixels + (cropY + row) * decW + cropX;
+            uint16_t* dRow = (uint16_t*)m_canvas.getBuffer() + (drawY + row) * 240 + drawX;
+            for (int col = 0; col < visibleW; ++col) {
+                dRow[col] = sRow[visibleW - 1 - col];
             }
         }
-        if (!isBlack) {
-            activeSrcY = y;
-            break;
-        }
     }
 
-    // Scan bottom-up to find the last non-black row
-    int activeEnd = decH - 1;
-    for (int y = decH - 1; y > decH / 2; --y) {
-        bool isBlack = true;
-        for (int x = decW / 4; x < (decW * 3) / 4; ++x) {
-            uint16_t color = ptr[y * decW + x];
-            if (color != 0x0000 && color != 0x0821) {
-                isBlack = false;
-                break;
-            }
-        }
-        if (!isBlack) {
-            activeEnd = y;
-            break;
-        }
-    }
-
-    activeSrcH = (activeEnd - activeSrcY) + 1;
-    if (activeSrcH < decH / 3) {
-        // Fallback if detection fails (e.g. extremely dark scene)
-        if (decH >= 118) {
-            activeSrcH = (decW * 2) / 3;
-            activeSrcY = (decH - activeSrcH) / 2;
-        } else {
-            activeSrcH = decH;
-            activeSrcY = 0;
-        }
-    }
-
-    // Target frame dimensions: Height = 135 (fills 100% of display height, NO top/bottom black borders)
-    // We calculate width dynamically to preserve the exact aspect ratio of the cropped source.
-    const int dstH = 135;
-    const int dstW = (int)((float)dstH * ((float)decW / (float)activeSrcH));
-    const int drawX = (240 - dstW) / 2; // Center horizontally (Left/Right black pillars are expected/acceptable)
-
-    // Clear left and right pillar margins on canvas
-    if (drawX > 0) {
-        m_canvas.fillRect(0, 0, drawX, 135, TFT_BLACK);
-        m_canvas.fillRect(drawX + dstW, 0, 240 - (drawX + dstW), 135, TFT_BLACK);
-    }
-
-    // Fast 0.4ms LUT mapping from active area directly to the 135px height canvas
-    fastUpscale(
-        (const uint16_t*)m_decodeSprite.getBuffer(),
-        decW,           // source stride
-        decW,           // width to sample
-        activeSrcH,     // height to sample
-        activeSrcY,     // Y offset in source
-        (uint16_t*)m_canvas.getBuffer(),
-        240,            // dst stride
-        drawX,
-        dstW,
-        dstH,
-        m_mirror
-    );
-
-    // Step 3: Draw floating transparent OSD with 1px drop shadow directly onto canvas
+    // Draw floating transparent OSD with 1px drop shadow
     if (expText.length() > 0) {
-        // Bottom-Left: Exposure parameters
         m_canvas.setTextDatum(datum_t::bottom_left);
         m_canvas.setTextColor(TFT_BLACK);
         m_canvas.drawString(expText.c_str(), 5, 133); // Shadow
@@ -414,7 +316,7 @@ bool FujiLiveViewStream::render(M5GFX& display, const String& expText) {
     m_canvas.setTextColor(0x00FF88);
     m_canvas.drawString(fpsBuf, 236, 132);
 
-    // Step 4: Atomic 1-shot DMA push to physical LCD (Zero Flicker!)
+    // Atomic 1-shot DMA push to physical LCD (Zero Flicker!)
     m_canvas.pushSprite(&display, 0, 0);
     return true;
 }
