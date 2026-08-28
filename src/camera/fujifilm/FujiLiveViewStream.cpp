@@ -29,26 +29,37 @@ static bool readJpegDimensions(const uint8_t* data, size_t len, int& outW, int& 
 }
 
 // Precomputed look-up tables for ultra-fast (0.4ms) nearest-neighbor scaling
-static uint16_t s_lutX[204];
+static uint16_t s_lutX[240];
 static uint16_t s_lutY[135];
-static bool s_lutInit = false;
+static int s_cachedSrcW = 0, s_cachedSrcH = 0, s_cachedSrcY = 0;
+static int s_cachedDstW = 0, s_cachedDstH = 0;
 
-static void initLut(int srcW, int srcH, int dstW, int dstH) {
+static void updateLut(int srcW, int srcActiveH, int srcOffsetY, int dstW, int dstH) {
+    if (s_cachedSrcW == srcW && s_cachedSrcH == srcActiveH && s_cachedSrcY == srcOffsetY &&
+        s_cachedDstW == dstW && s_cachedDstH == dstH) {
+        return;
+    }
+    s_cachedSrcW = srcW;
+    s_cachedSrcH = srcActiveH;
+    s_cachedSrcY = srcOffsetY;
+    s_cachedDstW = dstW;
+    s_cachedDstH = dstH;
+
     for (int x = 0; x < dstW; ++x) {
         s_lutX[x] = (x * srcW) / dstW;
     }
     for (int y = 0; y < dstH; ++y) {
-        s_lutY[y] = (y * srcH) / dstH;
+        s_lutY[y] = srcOffsetY + (y * srcActiveH) / dstH;
     }
-    s_lutInit = true;
 }
 
-static void fastUpscale(const uint16_t* src, int srcW, int srcH, uint16_t* dst, int dstStride, int drawX, int dstW, int dstH, bool mirror) {
-    if (!s_lutInit) initLut(srcW, srcH, dstW, dstH);
+static void fastUpscale(const uint16_t* src, int srcStride, int srcW, int srcActiveH, int srcOffsetY,
+                        uint16_t* dst, int dstStride, int drawX, int dstW, int dstH, bool mirror) {
+    updateLut(srcW, srcActiveH, srcOffsetY, dstW, dstH);
 
     for (int dy = 0; dy < dstH; ++dy) {
         int sy = s_lutY[dy];
-        const uint16_t* sRow = src + sy * srcW;
+        const uint16_t* sRow = src + sy * srcStride;
         uint16_t* dRow = dst + dy * dstStride + drawX;
         if (!mirror) {
             for (int dx = 0; dx < dstW; ++dx) {
@@ -143,10 +154,9 @@ void FujiLiveViewStream::update() {
         return;
     }
 
-    // High-performance asynchronous non-blocking stream reader
+    // Process all pending packets aggressively
     while (m_client.available() > 0) {
         if (m_state == StreamState::WAIT_HEADER) {
-            // Read 4-byte total packet length in chunks
             int n = m_client.read(m_headerBytes + m_headerBytesRead, 4 - m_headerBytesRead);
             if (n > 0) {
                 m_headerBytesRead += n;
@@ -177,12 +187,15 @@ void FujiLiveViewStream::update() {
 
         if (m_state == StreamState::READ_PAYLOAD) {
             size_t remaining = m_expectedPayloadLen - m_payloadBytesRead;
-            int avail = m_client.available();
-            if (avail > 0) {
+            while (remaining > 0 && m_client.available() > 0) {
+                int avail = m_client.available();
                 int toRead = std::min((size_t)avail, remaining);
                 int n = m_client.read(m_assembleBuffer.data() + m_payloadBytesRead, toRead);
                 if (n > 0) {
                     m_payloadBytesRead += n;
+                    remaining -= n;
+                } else {
+                    break;
                 }
             }
 
@@ -206,8 +219,8 @@ void FujiLiveViewStream::update() {
                 m_state = StreamState::WAIT_HEADER;
                 m_headerBytesRead = 0;
                 m_payloadBytesRead = 0;
+                break; // Return immediately to render newly arrived frame!
             } else {
-                // Yield to main loop
                 break;
             }
         }
@@ -222,15 +235,16 @@ bool FujiLiveViewStream::render(M5GFX& display, const String& expText) {
     readJpegDimensions(m_frameBuffer.data(), m_frameBuffer.size(), imgW, imgH);
     if (imgW <= 0 || imgH <= 0) {
         imgW = 640;
-        imgH = 424;
+        imgH = 480;
     }
 
-    // 1/4 IDCT intermediate size: 640x424 -> 160x106
+    // 1/4 IDCT hardware decoded dimensions
     int decW = imgW / 4;
     int decH = imgH / 4;
 
-    // Ensure 160x106 decode sprite is initialized in fast SRAM
-    if (!m_decodeSpriteInit) {
+    // Ensure 1/4 IDCT decode sprite is initialized in fast internal SRAM
+    if (!m_decodeSpriteInit || m_decodeSprite.width() != decW || m_decodeSprite.height() != decH) {
+        m_decodeSprite.deleteSprite();
         m_decodeSprite.setPsram(false);
         m_decodeSprite.setColorDepth(16);
         m_decodeSprite.createSprite(decW, decH);
@@ -251,7 +265,7 @@ bool FujiLiveViewStream::render(M5GFX& display, const String& expText) {
         m_canvas.setTextWrap(false);
     }
 
-    // Step 1: Pure integer 1/4 IDCT hardware decode into m_decodeSprite (takes only 5.5ms!)
+    // Step 1: Pure integer 1/4 IDCT hardware decode into m_decodeSprite (5.5ms)
     m_decodeSprite.drawJpg(
         m_frameBuffer.data(),
         m_frameBuffer.size(),
@@ -261,23 +275,38 @@ bool FujiLiveViewStream::render(M5GFX& display, const String& expText) {
         0.25f, 0.25f
     );
 
-    // Step 2: Target 3:2 frame fills 100% full screen height (dstH = 135, dstW = 204)
+    // Step 2: Extract active 3:2 camera sensor region and remove any 4:3 letterbox padding
+    int activeSrcY = 0;
+    int activeSrcH = decH;
+
+    // When camera sends 4:3 stream (decH = 120), the 3:2 scene occupies central 106 rows (y = 7..112)
+    if (decH >= 118) {
+        activeSrcH = (decW * 2) / 3; // 160 * 2 / 3 = 106
+        activeSrcY = (decH - activeSrcH) / 2; // (120 - 106) / 2 = 7
+    }
+
+    // Target frame dimensions: Height = 135 (fills 100% of display, 0 top/bottom black borders!)
+    // 3:2 aspect width: 135 * 1.5 = 204
     const int dstW = 204;
-    const int dstH = 135; // Exactly 135px, 0 top/bottom black borders!
+    const int dstH = 135;
     const int drawX = (240 - dstW) / 2; // 18px side pillar
 
     // Clear left and right pillar margins on canvas
     m_canvas.fillRect(0, 0, drawX, 135, TFT_BLACK);
     m_canvas.fillRect(drawX + dstW, 0, 240 - (drawX + dstW), 135, TFT_BLACK);
 
-    // Fast 0.4ms LUT nearest-neighbor stretch from 160x106 to 204x135
+    // Fast 0.4ms LUT mapping from active area (activeSrcY..activeSrcY+activeSrcH) directly to 0..134
     fastUpscale(
         (const uint16_t*)m_decodeSprite.getBuffer(),
-        decW, decH,
+        decW,
+        decW,
+        activeSrcH,
+        activeSrcY,
         (uint16_t*)m_canvas.getBuffer(),
         240,
         drawX,
-        dstW, dstH,
+        dstW,
+        dstH,
         m_mirror
     );
 

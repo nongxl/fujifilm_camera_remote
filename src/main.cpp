@@ -361,7 +361,9 @@ void loop()
 {
     M5.update();
     g_wifiManager.update();
-    g_camera.update();
+    if (!g_inLiveViewMode) {
+        g_camera.update();
+    }
     g_imu.update();
     g_liveViewStream.update();
 
