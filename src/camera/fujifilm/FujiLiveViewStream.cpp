@@ -434,72 +434,82 @@ bool FujiLiveViewStream::render(M5GFX& display, const String& expText, const Liv
 
     // 2. Render Semi-Transparent Menu Overlay (if opened)
     if (overlay && overlay->showMenu && !overlay->showSlider) {
-        // Draw 4 parameter cards below top status bar (y: 25..129)
+        // Draw 4 parameter cards below top status bar with compact 1/3 reduced height (ch = 34px)
         const struct {
             const char* title;
             String val;
             int x, y;
             bool selected;
         } cards[4] = {
-            { "ISO",      overlay->isoVal,   4, 25, overlay->selectedParam == 0 },
-            { "Aperture", overlay->aptVal, 124, 25, overlay->selectedParam == 1 },
-            { "Shutter",  overlay->shtVal,   4, 78, overlay->selectedParam == 2 },
-            { "EV",       overlay->evVal,  124, 78, overlay->selectedParam == 3 }
+            { "ISO",      overlay->isoVal,   4, 38, overlay->selectedParam == 0 },
+            { "Aperture", overlay->aptVal, 122, 38, overlay->selectedParam == 1 },
+            { "Shutter",  overlay->shtVal,   4, 80, overlay->selectedParam == 2 },
+            { "EV",       overlay->evVal,  122, 80, overlay->selectedParam == 3 }
         };
 
         for (int i = 0; i < 4; ++i) {
             int cx = cards[i].x;
             int cy = cards[i].y;
-            int cw = 112;
-            int ch = 49;
+            int cw = 114;
+            int ch = 34; // Reduced height by 1/3
 
             if (cards[i].selected) {
-                // Highlighted card: Emerald tint glass with 2px neon green border
-                currentCanvas.fillRectAlpha(cx, cy, cw, ch, 200, 0x081808);
+                // Highlighted card: Pure dark alpha glass with neon green double border
+                currentCanvas.fillRectAlpha(cx, cy, cw, ch, 185, 0x0000);
                 currentCanvas.drawRoundRect(cx, cy, cw, ch, 5, 0x00FF88);
                 currentCanvas.drawRoundRect(cx + 1, cy + 1, cw - 2, ch - 2, 4, 0x00FF88);
             } else {
-                // Unselected card: Dark alpha glass with subtle gray border
-                currentCanvas.fillRectAlpha(cx, cy, cw, ch, 165, 0x0000);
+                // Unselected card: Pure dark alpha glass with frosted slate border
+                currentCanvas.fillRectAlpha(cx, cy, cw, ch, 160, 0x0000);
                 currentCanvas.drawRoundRect(cx, cy, cw, ch, 5, 0x3186);
             }
 
-            // Card title (top-left)
-            currentCanvas.setTextDatum(datum_t::top_left);
-            currentCanvas.setTextColor(cards[i].selected ? 0x00FF88 : 0x888888);
-            currentCanvas.drawString(cards[i].title, cx + 7, cy + 5);
+            // Card title (left-aligned, pure crisp green)
+            currentCanvas.setTextSize(1);
+            currentCanvas.setTextDatum(datum_t::middle_left);
+            currentCanvas.setTextColor(0x00FF88);
+            currentCanvas.drawString(cards[i].title, cx + 8, cy + ch / 2);
 
-            // Card value (bottom-right)
-            currentCanvas.setTextDatum(datum_t::bottom_right);
+            // Card value (right-aligned, enlarged bold text)
+            if (cards[i].val.length() > 5) {
+                currentCanvas.setTextSize(1);
+            } else {
+                currentCanvas.setTextSize(2);
+            }
+            currentCanvas.setTextDatum(datum_t::middle_right);
             currentCanvas.setTextColor(TFT_WHITE);
-            currentCanvas.drawString(cards[i].val.c_str(), cx + cw - 7, cy + ch - 5);
+            currentCanvas.drawString(cards[i].val.c_str(), cx + cw - 8, cy + ch / 2);
         }
+        currentCanvas.setTextSize(1);
     }
 
     // 3. Render Slider Adjust Overlay (if in adjust mode)
     if (overlay && overlay->showSlider) {
         int sx = 4, sy = 68, sw = 232, sh = 62;
         currentCanvas.fillRectAlpha(sx, sy, sw, sh, 210, 0x0000); // 82% dark alpha glass
-        currentCanvas.drawRoundRect(sx, sy, sw, sh, 6, 0x00E5FF); // Cyan border
-        currentCanvas.drawRoundRect(sx + 1, sy + 1, sw - 2, sh - 2, 5, 0x00E5FF);
+        currentCanvas.drawRoundRect(sx, sy, sw, sh, 6, 0x00FF88); // Neon green border
+        currentCanvas.drawRoundRect(sx + 1, sy + 1, sw - 2, sh - 2, 5, 0x00FF88);
 
         // Title (Center Top)
+        currentCanvas.setTextSize(1);
         currentCanvas.setTextDatum(datum_t::top_center);
-        currentCanvas.setTextColor(0x00E5FF);
+        currentCanvas.setTextColor(0x00FF88);
         currentCanvas.drawString(overlay->sliderTitle.c_str(), 120, sy + 6);
 
-        // Value (Center Middle)
+        // Value (Center Middle - Large Text)
+        currentCanvas.setTextSize(2);
         currentCanvas.setTextDatum(datum_t::middle_center);
         currentCanvas.setTextColor(TFT_WHITE);
         currentCanvas.drawString(("<  " + overlay->sliderVal + "  >").c_str(), 120, sy + 28);
+        currentCanvas.setTextSize(1);
 
         // Track bar & Knob
-        int trackX = sx + 12, trackY = sy + 44, trackW = sw - 24, trackH = 6;
+        int trackX = sx + 12, trackY = sy + 46, trackW = sw - 24, trackH = 6;
         currentCanvas.fillRect(trackX, trackY, trackW, trackH, 0x3186);
 
         if (overlay->sliderTotal > 1) {
             int knobX = trackX + (trackW - 12) * overlay->sliderIndex / (overlay->sliderTotal - 1);
-            currentCanvas.fillRoundRect(knobX, trackY - 2, 12, 10, 3, 0x00E5FF);
+            currentCanvas.fillRoundRect(knobX, trackY - 2, 12, 10, 3, 0x00FF88);
             currentCanvas.drawRoundRect(knobX, trackY - 2, 12, 10, 3, TFT_WHITE);
         }
     }
