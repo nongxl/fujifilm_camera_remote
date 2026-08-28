@@ -1,4 +1,8 @@
 #include "FujiLiveViewStream.h"
+#include <WiFi.h>
+#include <esp_wifi.h>
+#include <lwip/sockets.h>
+#include <lwip/netdb.h>
 
 namespace {
 static bool readJpegDimensions(const uint8_t* data, size_t len, int& outW, int& outH) {
@@ -116,6 +120,14 @@ bool FujiLiveViewStream::start(const IPAddress& cameraIp, uint16_t port) {
     m_client.setNoDelay(true);
     m_client.setTimeout(1);
 
+    int fd = m_client.fd();
+    if (fd >= 0) {
+        int nodelay = 1;
+        setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &nodelay, sizeof(nodelay));
+        int rcvbuf = 32768;
+        setsockopt(fd, SOL_SOCKET, SO_RCVBUF, &rcvbuf, sizeof(rcvbuf));
+    }
+
     Serial.println("[LiveView] Connected to MJPEG Stream!");
     return true;
 }
@@ -144,6 +156,13 @@ void FujiLiveViewStream::update() {
             if (m_client.connect(m_cameraIp, m_port)) {
                 m_client.setNoDelay(true);
                 m_client.setTimeout(1);
+                int fd = m_client.fd();
+                if (fd >= 0) {
+                    int nodelay = 1;
+                    setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &nodelay, sizeof(nodelay));
+                    int rcvbuf = 32768;
+                    setsockopt(fd, SOL_SOCKET, SO_RCVBUF, &rcvbuf, sizeof(rcvbuf));
+                }
                 Serial.println("[LiveView] Reconnected to MJPEG Stream!");
             }
             m_lastFrameTime = millis();
@@ -194,19 +213,25 @@ void FujiLiveViewStream::update() {
         if (m_state == StreamState::READ_PAYLOAD) {
             size_t remaining = m_expectedPayloadLen - m_payloadBytesRead;
             unsigned long startWait = millis();
+            int fd = m_client.fd();
 
             while (remaining > 0) {
-                avail = m_client.available();
-                if (avail > 0) {
-                    int toRead = std::min((size_t)avail, remaining);
-                    int n = m_client.read(m_assembleBuffer.data() + m_payloadBytesRead, toRead);
-                    if (n > 0) {
-                        m_payloadBytesRead += n;
-                        remaining -= n;
-                        startWait = millis(); // Reset timeout on successful read
-                    } else {
-                        break;
+                int n = -1;
+                if (fd >= 0) {
+                    n = recv(fd, m_assembleBuffer.data() + m_payloadBytesRead, remaining, MSG_DONTWAIT);
+                }
+                if (n <= 0) {
+                    avail = m_client.available();
+                    if (avail > 0) {
+                        int toRead = std::min((size_t)avail, remaining);
+                        n = m_client.read(m_assembleBuffer.data() + m_payloadBytesRead, toRead);
                     }
+                }
+
+                if (n > 0) {
+                    m_payloadBytesRead += n;
+                    remaining -= n;
+                    startWait = millis(); // Reset timeout on successful read
                 } else {
                     if (millis() - startWait > 50) {
                         break; // Timeout waiting for next packet segment, yield to main loop

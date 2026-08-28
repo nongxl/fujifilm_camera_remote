@@ -1,4 +1,5 @@
 #include "WifiManager.h"
+#include <esp_wifi.h>
 
 WifiManager::WifiManager() {
 }
@@ -9,6 +10,8 @@ WifiManager::~WifiManager() {
 void WifiManager::begin() {
     WiFi.mode(WIFI_STA);
     WiFi.disconnect();
+    WiFi.setSleep(false);
+    esp_wifi_set_ps(WIFI_PS_NONE);
     delay(100);
     setState(WifiState::IDLE, "WiFi Initialized");
 }
@@ -79,6 +82,8 @@ void WifiManager::update() {
         }
     } else if (m_state == WifiState::CONNECTING) {
         if (WiFi.status() == WL_CONNECTED) {
+            WiFi.setSleep(false);
+            esp_wifi_set_ps(WIFI_PS_NONE);
             setState(WifiState::CONNECTED, "IP: " + WiFi.localIP().toString());
         } else if (millis() - m_connectStartTime > CONNECT_TIMEOUT_MS) {
             setState(WifiState::CONNECT_FAILED, "Connection timeout");
