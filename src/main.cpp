@@ -129,7 +129,7 @@ void showDashboard(bool show)
             if (g_infoLabel) lv_obj_add_flag(g_infoLabel, LV_OBJ_FLAG_HIDDEN);
             if (g_btnLabel) {
                 lv_obj_clear_flag(g_btnLabel, LV_OBJ_FLAG_HIDDEN);
-                lv_label_set_text(g_btnLabel, "[A] Adjust  |  [B] Next\n[Hold B] LiveView");
+                lv_label_set_text(g_btnLabel, "[A] Adjust  |  [B] LiveView\nTilt device to select");
             }
             updateParameterCards();
         } else {
@@ -487,19 +487,12 @@ void loop()
                     Serial.println("[UI] Entered Dashboard menu");
                 }
             } else {
-                if (isDoubleClick) {
-                    // Double-click B in Dashboard: Return to LiveView
-                    g_inLiveViewMode = true;
-                    showDashboard(false);
-                    M5.Display.fillScreen(TFT_BLACK);
-                    g_liveViewStream.start(g_cameraIP);
-                    Serial.println("[UI] Returned to LiveView (Double-click)");
-                } else {
-                    // Single-click B in Dashboard: Cycle parameter card selection!
-                    g_selectedParam = (SelectedParam)(((int)g_selectedParam + 1) % 4);
-                    updateParameterCards();
-                    Serial.printf("[UI] Cycled selected param to: %d\n", (int)g_selectedParam);
-                }
+                // In Dashboard mode: Short press B directly exits menu and returns to LiveView!
+                g_inLiveViewMode = true;
+                showDashboard(false);
+                M5.Display.fillScreen(TFT_BLACK);
+                g_liveViewStream.start(g_cameraIP);
+                Serial.println("[UI] Returned to LiveView");
             }
         } else if (g_appState == AppState::CAMERA_ADJUSTING_PARAM) {
             // Short press B in adjust mode: Cancel
@@ -527,16 +520,6 @@ void loop()
         updateUI("RESET DONE", "Paired camera cleared", "[A] Scan Wi-Fi\n[B] Reset");
         Serial.println("[UI] Cleared NVS profile by long-press B.");
         delay(300);
-    }
-
-    // Long press Button B in Dashboard (500ms): Return to LiveView
-    if (M5.BtnB.pressedFor(500) && g_appState == AppState::CAMERA_READY && !g_inLiveViewMode) {
-        g_inLiveViewMode = true;
-        showDashboard(false);
-        M5.Display.fillScreen(TFT_BLACK);
-        g_liveViewStream.start(g_cameraIP);
-        Serial.println("[UI] Returned to LiveView (Long-press B)");
-        delay(300); // Debounce trigger
     }
 
     // State machine transitions

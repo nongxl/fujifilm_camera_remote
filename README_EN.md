@@ -139,10 +139,9 @@ Modifying exposure parameters (ISO, Aperture, Shutter Speed, EV) requires two co
     *   **Short Press [B]**: Call up **Parameter Dashboard Menu** 🎛️.
     *   **Double Press [B]**: Toggle **Horizontal Mirror Flip** (Selfie Viewfinder mode).
 *   **Parameter Dashboard Menu Mode (Dashboard)** 🎛️:
-    *   **Short Press [B]**: Cycle through parameter cards (`ISO` -> `Aperture` -> `Shutter` -> `EV`).
-    *   **IMU Motion Tilt (Up/Down/Left/Right)**: Navigate across the 2×2 card grid via gravity gestures.
+    *   **IMU Motion Tilt (Up/Down/Left/Right)**: Navigate across the 2×2 card grid via gravity gestures to highlight parameters.
     *   **Short Press [A]**: Enter **IMU Motion Slider Adjust Mode** for the highlighted card.
-    *   **Long Press [B] (Hold 0.5s) / Double Press [B]**: Close menu and return to **LiveView Viewfinder Mode** 📺.
+    *   **Short Press [B]**: Close menu and return to **LiveView Viewfinder Mode** 📺.
 *   **IMU Motion Slider Adjust Mode**:
     *   **Tilt Device Left / Right**: Smoothly and continuously step through candidate parameter values.
     *   **Short Press [A]**: Confirm and apply new value to camera, returning to parameter menu.
