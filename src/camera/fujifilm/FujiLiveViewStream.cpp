@@ -149,19 +149,30 @@ void FujiLiveViewStream::update() {
         return;
     }
 
-    // Process all pending packets aggressively
+    int fd = m_client.fd();
+    if (fd < 0) return;
+
+    // Process all pending packets aggressively without artificial sleep delays
     while (true) {
         if (!m_client.connected()) break;
-        int avail = m_client.available();
-        if (avail == 0 && m_state == StreamState::WAIT_HEADER) {
-            break; // Yield if no new frame is starting
-        }
 
         if (m_state == StreamState::WAIT_HEADER) {
-            int n = m_client.read(m_headerBytes + m_headerBytesRead, 4 - m_headerBytesRead);
-            if (n > 0) {
-                m_headerBytesRead += n;
+            int toRead = 4 - m_headerBytesRead;
+            int n = -1;
+            if (fd >= 0) {
+                n = recv(fd, m_headerBytes + m_headerBytesRead, toRead, MSG_DONTWAIT);
             }
+            if (n <= 0) {
+                int avail = m_client.available();
+                if (avail > 0) {
+                    n = m_client.read(m_headerBytes + m_headerBytesRead, std::min(avail, toRead));
+                }
+            }
+
+            if (n <= 0) {
+                break; // No new packet header ready right now
+            }
+            m_headerBytesRead += n;
 
             if (m_headerBytesRead == 4) {
                 uint32_t totalLen = 0;
@@ -188,16 +199,13 @@ void FujiLiveViewStream::update() {
 
         if (m_state == StreamState::READ_PAYLOAD) {
             size_t remaining = m_expectedPayloadLen - m_payloadBytesRead;
-            unsigned long startWait = millis();
-            int fd = m_client.fd();
-
-            while (remaining > 0) {
+            if (remaining > 0) {
                 int n = -1;
                 if (fd >= 0) {
                     n = recv(fd, m_assembleBuffer.data() + m_payloadBytesRead, remaining, MSG_DONTWAIT);
                 }
                 if (n <= 0) {
-                    avail = m_client.available();
+                    int avail = m_client.available();
                     if (avail > 0) {
                         int toRead = std::min((size_t)avail, remaining);
                         n = m_client.read(m_assembleBuffer.data() + m_payloadBytesRead, toRead);
@@ -207,12 +215,8 @@ void FujiLiveViewStream::update() {
                 if (n > 0) {
                     m_payloadBytesRead += n;
                     remaining -= n;
-                    startWait = millis(); // Reset timeout on successful read
                 } else {
-                    if (millis() - startWait > 50) {
-                        break; // Timeout waiting for next packet segment, yield to main loop
-                    }
-                    delay(1); // Micro-yield to Wi-Fi stack to fill buffer
+                    break; // Yield immediately to loop() without any delay!
                 }
             }
 
@@ -247,8 +251,6 @@ void FujiLiveViewStream::update() {
                 m_headerBytesRead = 0;
                 m_payloadBytesRead = 0;
                 break; // Return immediately to render newly arrived frame!
-            } else {
-                break;
             }
         }
     }
