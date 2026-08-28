@@ -72,17 +72,20 @@ private:
     uint8_t* m_jpegOutputBuffer = nullptr;
     size_t m_jpegOutputCapacity = 0;
 
-    // Final composition double-buffering canvas (240x135, internal DMA SRAM)
-    LGFX_Sprite m_canvas;
+    // True Ping-Pong Double-Buffering Display Canvases (240x135 in internal DMA SRAM)
+    LGFX_Sprite m_canvasA;
+    LGFX_Sprite m_canvasB;
+    int m_activeCanvas = 0;
     bool m_canvasInit = false;
 
     unsigned long m_lastFrameTime = 0;
     unsigned long m_lastFpsCalcTime = 0;
+    unsigned long m_lastRenderTime = 0;
     uint32_t m_frameCounter = 0;
     float m_currentFps = 0.0f;
 
     static constexpr size_t RX_BUFFER_SIZE = 8192;
-    static constexpr size_t MAX_FRAME_SIZE = 65536; // 64KB max per JPEG frame (Fuji frames are ~18KB)
+    static constexpr size_t MAX_FRAME_SIZE = 65536; // 64KB max per JPEG frame
     static constexpr unsigned long STREAM_WATCHDOG_MS = 3000;
     static constexpr uint16_t JPEG_DECODE_WIDTH = 320;
     static constexpr uint16_t JPEG_DECODE_HEIGHT = 240;

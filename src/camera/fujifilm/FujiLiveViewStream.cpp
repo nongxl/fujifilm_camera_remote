@@ -6,7 +6,7 @@
 #include <esp_heap_caps.h>
 
 FujiLiveViewStream::FujiLiveViewStream() 
-    : m_canvas(&M5.Display) {
+    : m_canvasA(&M5.Display), m_canvasB(&M5.Display) {
 }
 
 FujiLiveViewStream::~FujiLiveViewStream() {
@@ -32,7 +32,8 @@ FujiLiveViewStream::~FujiLiveViewStream() {
         m_frameBufferB = nullptr;
     }
     if (m_canvasInit) {
-        m_canvas.deleteSprite();
+        m_canvasA.deleteSprite();
+        m_canvasB.deleteSprite();
         m_canvasInit = false;
     }
 }
@@ -111,18 +112,30 @@ bool FujiLiveViewStream::ensureDecoder() {
         }
     }
 
-    // Ensure 240x135 canvas is initialized in internal DMA SRAM
+    // Ensure 240x135 Ping-Pong canvases are initialized
     if (!m_canvasInit) {
-        m_canvas.setPsram(false);
-        m_canvas.setColorDepth(16);
-        void* ptr = m_canvas.createSprite(240, 135);
-        if (ptr == nullptr && psramFound()) {
-            m_canvas.setPsram(true);
-            m_canvas.createSprite(240, 135);
+        m_canvasA.setPsram(false);
+        m_canvasA.setColorDepth(16);
+        void* ptrA = m_canvasA.createSprite(240, 135);
+        if (ptrA == nullptr && psramFound()) {
+            m_canvasA.setPsram(true);
+            m_canvasA.createSprite(240, 135);
         }
+        m_canvasA.setTextSize(1);
+        m_canvasA.setTextWrap(false);
+
+        m_canvasB.setPsram(false);
+        m_canvasB.setColorDepth(16);
+        void* ptrB = m_canvasB.createSprite(240, 135);
+        if (ptrB == nullptr && psramFound()) {
+            m_canvasB.setPsram(true);
+            m_canvasB.createSprite(240, 135);
+        }
+        m_canvasB.setTextSize(1);
+        m_canvasB.setTextWrap(false);
+
+        m_activeCanvas = 0;
         m_canvasInit = true;
-        m_canvas.setTextSize(1);
-        m_canvas.setTextWrap(false);
     }
 
     return true;
@@ -140,6 +153,7 @@ bool FujiLiveViewStream::start(const IPAddress& cameraIp, uint16_t port) {
     m_readyLen = 0;
     m_lastFrameTime = millis();
     m_lastFpsCalcTime = millis();
+    m_lastRenderTime = millis();
     m_frameCounter = 0;
     m_currentFps = 0.0f;
 
@@ -341,7 +355,7 @@ bool FujiLiveViewStream::render(M5GFX& display, const String& expText) {
     const int decW = outInfo.width > 0 ? outInfo.width : JPEG_DECODE_WIDTH;
     const int decH = outInfo.height > 0 ? outInfo.height : JPEG_DECODE_HEIGHT;
 
-    // Center-crop 320x240 into 240x135 on double-buffering canvas
+    // Center-crop 320x240 into 240x135 on target double-buffering canvas
     const int visibleW = std::min(decW, 240); // 240
     const int visibleH = 135;
     const int cropX = (decW - visibleW) / 2; // (320 - 240) / 2 = 40
@@ -351,17 +365,20 @@ bool FujiLiveViewStream::render(M5GFX& display, const String& expText) {
 
     const uint16_t* pixels = reinterpret_cast<const uint16_t*>(m_jpegOutputBuffer);
 
-    // Blit hardware decoded rows into double-buffering canvas
+    // Pick alternate canvas for double-buffering composition
+    LGFX_Sprite& currentCanvas = (m_activeCanvas == 0) ? m_canvasA : m_canvasB;
+
+    // Blit hardware decoded rows into chosen canvas
     if (!m_mirror) {
         for (int row = 0; row < visibleH; ++row) {
             const uint16_t* sRow = pixels + (cropY + row) * decW + cropX;
-            uint16_t* dRow = (uint16_t*)m_canvas.getBuffer() + (drawY + row) * 240 + drawX;
+            uint16_t* dRow = (uint16_t*)currentCanvas.getBuffer() + (drawY + row) * 240 + drawX;
             memcpy(dRow, sRow, visibleW * sizeof(uint16_t));
         }
     } else {
         for (int row = 0; row < visibleH; ++row) {
             const uint16_t* sRow = pixels + (cropY + row) * decW + cropX;
-            uint16_t* dRow = (uint16_t*)m_canvas.getBuffer() + (drawY + row) * 240 + drawX;
+            uint16_t* dRow = (uint16_t*)currentCanvas.getBuffer() + (drawY + row) * 240 + drawX;
             for (int col = 0; col < visibleW; ++col) {
                 dRow[col] = sRow[visibleW - 1 - col];
             }
@@ -369,29 +386,28 @@ bool FujiLiveViewStream::render(M5GFX& display, const String& expText) {
     }
 
     // Draw sleek dark glassmorphism pill banner at bottom (height 17px, y: 116..133)
-    // to prevent pixel noise & blocky artifacts behind text
-    m_canvas.fillRoundRect(2, 116, 236, 17, 3, 0x1082); // Dark slate background
-    m_canvas.drawRoundRect(2, 116, 236, 17, 3, 0x2965); // Crisp subtle border
+    currentCanvas.fillRoundRect(2, 116, 236, 17, 3, 0x1082); // Dark slate background
+    currentCanvas.drawRoundRect(2, 116, 236, 17, 3, 0x2965); // Crisp subtle border
 
     // Left: Exposure parameters in crisp white
     if (expText.length() > 0) {
-        m_canvas.setTextDatum(datum_t::middle_left);
-        m_canvas.setTextColor(TFT_WHITE);
-        m_canvas.drawString(expText.c_str(), 8, 125);
+        currentCanvas.setTextDatum(datum_t::middle_left);
+        currentCanvas.setTextColor(TFT_WHITE);
+        currentCanvas.drawString(expText.c_str(), 8, 125);
     }
 
     // Right: FPS counter in high-visibility neon green
     char fpsBuf[16];
     snprintf(fpsBuf, sizeof(fpsBuf), "%.0f fps", m_currentFps);
-    m_canvas.setTextDatum(datum_t::middle_right);
-    m_canvas.setTextColor(0x00FF88);
-    m_canvas.drawString(fpsBuf, 232, 125);
+    currentCanvas.setTextDatum(datum_t::middle_right);
+    currentCanvas.setTextColor(0x00FF88);
+    currentCanvas.drawString(fpsBuf, 232, 125);
 
-    // Direct hardware DMA transfer at 80MHz SPI bus (~3.2ms full screen push)
-    display.waitDMA();
-    display.startWrite();
-    display.setWindow(0, 0, 239, 134);
-    display.writePixelsDMA((uint16_t*)m_canvas.getBuffer(), 240 * 135, false);
-    display.endWrite();
+    // Push completed canvas to display using official LovyanGFX pipeline
+    currentCanvas.pushSprite(&display, 0, 0);
+
+    // Swap active canvas index for next frame
+    m_activeCanvas = 1 - m_activeCanvas;
+    m_lastRenderTime = millis();
     return true;
 }
