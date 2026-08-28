@@ -1,5 +1,7 @@
 # 富士相机全功能智能遥控器 (Fujifilm Camera Smart Remote)
 
+[中文](README.md) | [English](README_EN.md)
+
 本项目为 **M5Stack StickS3 (ESP32-S3)** 打造的一款全功能富士相机无线智能遥控取景器。
 突破传统蓝牙快门仅能触发拍照的限制，通过 **Wi-Fi 及富士私有 PTP/IP 协议** 深度打通相机的双向控制，实现**快门触发、曝光参数双向同步、IMU 体感重力调参以及基于硬件 SIMD 的高帧率 MJPEG 实时取景**。
 
