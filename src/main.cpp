@@ -106,12 +106,13 @@ void updateParameterCards()
     if (g_shutterValLabel) lv_label_set_text(g_shutterValLabel, exp.shutterSpeed.currentFormatted.c_str());
     if (g_evValLabel) lv_label_set_text(g_evValLabel, exp.ev.currentFormatted.c_str());
 
-    // Highlight selected card
+    // Highlight selected card with semi-transparent background
     auto highlightCard = [](lv_obj_t* card, bool selected) {
         if (!card) return;
-        lv_obj_set_style_border_color(card, selected ? lv_color_hex(0x00FF88) : lv_color_hex(0x383838), 0);
+        lv_obj_set_style_border_color(card, selected ? lv_color_hex(0x00FF88) : lv_color_hex(0x444444), 0);
         lv_obj_set_style_border_width(card, selected ? 2 : 1, 0);
-        lv_obj_set_style_bg_color(card, selected ? lv_color_hex(0x282828) : lv_color_hex(0x1E1E1E), 0);
+        lv_obj_set_style_bg_color(card, selected ? lv_color_hex(0x202020) : lv_color_hex(0x101010), 0);
+        lv_obj_set_style_bg_opa(card, selected ? LV_OPA_80 : LV_OPA_60, 0);
     };
 
     highlightCard(g_isoCard, g_selectedParam == SelectedParam::ISO);
@@ -144,8 +145,9 @@ void createParamCard(lv_obj_t* parent, const char* title, lv_obj_t*& outCard, lv
 {
     outCard = lv_obj_create(parent);
     lv_obj_set_size(outCard, 114, 40);
-    lv_obj_set_style_bg_color(outCard, lv_color_hex(0x1E1E1E), 0);
-    lv_obj_set_style_border_color(outCard, lv_color_hex(0x383838), 0);
+    lv_obj_set_style_bg_color(outCard, lv_color_hex(0x101010), 0);
+    lv_obj_set_style_bg_opa(outCard, LV_OPA_70, 0);
+    lv_obj_set_style_border_color(outCard, lv_color_hex(0x444444), 0);
     lv_obj_set_style_border_width(outCard, 1, 0);
     lv_obj_set_style_radius(outCard, 6, 0);
     lv_obj_set_style_pad_all(outCard, 2, 0);

@@ -271,7 +271,8 @@ void FujiLiveViewStream::processStreamData(const uint8_t* data, size_t len) {
 }
 
 void FujiLiveViewStream::rxTaskLoop() {
-    if (!m_rxBuffer) return;
+    uint8_t headerBuf[4];
+    size_t headerRead = 0;
 
     while (m_running) {
         if (!m_client.connected()) {
@@ -297,23 +298,100 @@ void FujiLiveViewStream::rxTaskLoop() {
         }
 
         int fd = m_client.fd();
-        int bytesRead = -1;
-        if (fd >= 0) {
-            bytesRead = recv(fd, m_rxBuffer, RX_BUFFER_SIZE, MSG_DONTWAIT);
-        }
-        if (bytesRead <= 0) {
-            int avail = m_client.available();
-            if (avail > 0) {
-                int toRead = std::min((int)RX_BUFFER_SIZE, avail);
-                bytesRead = m_client.read(m_rxBuffer, toRead);
+
+        // 1. Read authoritative 4-byte Fuji packet header (Little-endian totalLen)
+        while (headerRead < 4 && m_running) {
+            int n = -1;
+            if (fd >= 0) {
+                n = recv(fd, headerBuf + headerRead, 4 - headerRead, MSG_DONTWAIT);
+            }
+            if (n <= 0) {
+                int avail = m_client.available();
+                if (avail > 0) {
+                    n = m_client.read(headerBuf + headerRead, 4 - headerRead);
+                }
+            }
+
+            if (n > 0) {
+                headerRead += n;
+            } else {
+                vTaskDelay(1);
             }
         }
+        if (headerRead < 4) continue;
 
-        if (bytesRead > 0) {
-            processStreamData(m_rxBuffer, static_cast<size_t>(bytesRead));
-        } else {
-            // Micro-yield to lwIP TCP stack when socket rx buffer is drained
-            vTaskDelay(1);
+        uint32_t totalLen = 0;
+        memcpy(&totalLen, headerBuf, 4);
+
+        if (totalLen < 18 || totalLen > MAX_FRAME_SIZE) {
+            // Desync slide 1 byte
+            headerBuf[0] = headerBuf[1];
+            headerBuf[1] = headerBuf[2];
+            headerBuf[2] = headerBuf[3];
+            headerRead = 3;
+            continue;
+        }
+
+        size_t expectedPayload = totalLen - 4;
+        size_t payloadRead = 0;
+        uint8_t* assembleTarget = m_assembleBufPtr;
+
+        // 2. Read full packet payload completely (prevent truncated macroblocks & color corruptions)
+        while (payloadRead < expectedPayload && m_running) {
+            size_t remaining = expectedPayload - payloadRead;
+            int n = -1;
+            if (fd >= 0) {
+                n = recv(fd, assembleTarget + payloadRead, remaining, MSG_DONTWAIT);
+            }
+            if (n <= 0) {
+                int avail = m_client.available();
+                if (avail > 0) {
+                    n = m_client.read(assembleTarget + payloadRead, std::min((size_t)avail, remaining));
+                }
+            }
+
+            if (n > 0) {
+                payloadRead += n;
+            } else {
+                vTaskDelay(1);
+            }
+        }
+        headerRead = 0;
+
+        if (payloadRead == expectedPayload && assembleTarget) {
+            // Find exact JPEG SOI marker (0xFF 0xD8) within first 32 bytes (after 14-byte Fuji header)
+            size_t soiPos = 0;
+            bool foundSoi = false;
+            for (size_t i = 0; i + 1 < payloadRead && i < 32; ++i) {
+                if (assembleTarget[i] == 0xFF && assembleTarget[i+1] == 0xD8) {
+                    soiPos = i;
+                    foundSoi = true;
+                    break;
+                }
+            }
+
+            if (foundSoi && payloadRead > soiPos + 256) {
+                size_t jpegLen = payloadRead - soiPos;
+                portENTER_CRITICAL(&m_frameMux);
+                if (soiPos > 0) {
+                    memmove(assembleTarget, assembleTarget + soiPos, jpegLen);
+                }
+                uint8_t* temp = m_readyBufPtr;
+                m_readyBufPtr = m_assembleBufPtr;
+                m_assembleBufPtr = temp;
+                m_readyLen = jpegLen;
+                m_hasNewFrame = true;
+                portEXIT_CRITICAL(&m_frameMux);
+
+                m_lastFrameTime = millis();
+                m_frameCounter++;
+                unsigned long now = millis();
+                if (now - m_lastFpsCalcTime >= 1000) {
+                    m_currentFps = (float)m_frameCounter * 1000.0f / (float)(now - m_lastFpsCalcTime);
+                    m_frameCounter = 0;
+                    m_lastFpsCalcTime = now;
+                }
+            }
         }
     }
 }
@@ -385,15 +463,15 @@ bool FujiLiveViewStream::render(M5GFX& display, const String& expText) {
         }
     }
 
-    // Draw sleek dark glassmorphism pill banner at bottom (height 17px, y: 116..133)
-    currentCanvas.fillRoundRect(2, 116, 236, 17, 3, 0x1082); // Dark slate background
-    currentCanvas.drawRoundRect(2, 116, 236, 17, 3, 0x2965); // Crisp subtle border
+    // Top semi-transparent glassmorphism OSD banner (height 18px, y: 2..20)
+    currentCanvas.fillRectAlpha(2, 2, 236, 18, 170, 0x0000); // 67% dark alpha glass
+    currentCanvas.drawRoundRect(2, 2, 236, 18, 3, 0x3186);    // Subtle frosted border
 
     // Left: Exposure parameters in crisp white
     if (expText.length() > 0) {
         currentCanvas.setTextDatum(datum_t::middle_left);
         currentCanvas.setTextColor(TFT_WHITE);
-        currentCanvas.drawString(expText.c_str(), 8, 125);
+        currentCanvas.drawString(expText.c_str(), 8, 11);
     }
 
     // Right: FPS counter in high-visibility neon green
@@ -401,7 +479,7 @@ bool FujiLiveViewStream::render(M5GFX& display, const String& expText) {
     snprintf(fpsBuf, sizeof(fpsBuf), "%.0f fps", m_currentFps);
     currentCanvas.setTextDatum(datum_t::middle_right);
     currentCanvas.setTextColor(0x00FF88);
-    currentCanvas.drawString(fpsBuf, 232, 125);
+    currentCanvas.drawString(fpsBuf, 232, 11);
 
     // Push completed canvas to display using official LovyanGFX pipeline
     currentCanvas.pushSprite(&display, 0, 0);
