@@ -291,40 +291,77 @@ bool FujiLiveViewStream::render(M5GFX& display, const String& expText) {
         0.25f, 0.25f
     );
 
-    // Step 2: "Zoom to Fill" (Pan & Scan) - Extract exactly the 16:9 ratio active area to fill 240x135
-    // The camera image is decW x decH (e.g. 160x120 or 160x106).
-    // The LCD screen is 240x135 (Aspect Ratio: 1.777)
-    // To completely eliminate all black borders (top, bottom, left, right) while preserving aspect ratio,
-    // we must crop the source image to a 1.777 aspect ratio bounding box.
-    
-    // First, find the actual camera active picture bounds (removing 4:3 letterbox if present)
-    int rawActiveY = 0;
-    int rawActiveH = decH;
-    if (decH >= 118) {
-        rawActiveH = (decW * 2) / 3; // e.g. 160 * (2/3) = 106
-        rawActiveY = (decH - rawActiveH) / 2; // e.g. (120 - 106) / 2 = 7
+    // Step 2: Auto-detect active image bounds to remove ANY top/bottom black borders (Letterboxing)
+    // We scan the decoded sprite to find the first and last non-black rows.
+    uint16_t* ptr = (uint16_t*)m_decodeSprite.getBuffer();
+    int activeSrcY = 0;
+    int activeSrcH = decH;
+
+    // Scan top-down to find the first non-black row
+    for (int y = 0; y < decH / 2; ++y) {
+        bool isBlack = true;
+        // Sample middle 50% of the row to avoid edge artifacts
+        for (int x = decW / 4; x < (decW * 3) / 4; ++x) {
+            uint16_t color = ptr[y * decW + x];
+            if (color != 0x0000 && color != 0x0821) { // Not pure black or near-black
+                isBlack = false;
+                break;
+            }
+        }
+        if (!isBlack) {
+            activeSrcY = y;
+            break;
+        }
     }
 
-    // Now, crop the active picture (160x106, AR 1.5) to the screen's aspect ratio (AR 1.777)
-    // Because the picture (1.5) is taller than the screen (1.777), we crop the top/bottom.
-    // sampleW = decW (160)
-    // sampleH = decW / 1.777 = 90
-    int sampleW = decW;
-    int sampleH = (decW * 135) / 240; // 160 * 135 / 240 = 90
-    int sampleY = rawActiveY + (rawActiveH - sampleH) / 2; // e.g. 7 + (106 - 90)/2 = 15
-    
-    // Target frame dimensions: Height = 135, Width = 240 (Fills 100% of display, NO black borders!)
-    const int dstW = 240;
-    const int dstH = 135;
-    const int drawX = 0; // Full screen, no side pillars!
+    // Scan bottom-up to find the last non-black row
+    int activeEnd = decH - 1;
+    for (int y = decH - 1; y > decH / 2; --y) {
+        bool isBlack = true;
+        for (int x = decW / 4; x < (decW * 3) / 4; ++x) {
+            uint16_t color = ptr[y * decW + x];
+            if (color != 0x0000 && color != 0x0821) {
+                isBlack = false;
+                break;
+            }
+        }
+        if (!isBlack) {
+            activeEnd = y;
+            break;
+        }
+    }
 
-    // Fast 0.4ms LUT mapping from sample window (sampleY..sampleY+sampleH) directly to 0..134 and 0..239
+    activeSrcH = (activeEnd - activeSrcY) + 1;
+    if (activeSrcH < decH / 3) {
+        // Fallback if detection fails (e.g. extremely dark scene)
+        if (decH >= 118) {
+            activeSrcH = (decW * 2) / 3;
+            activeSrcY = (decH - activeSrcH) / 2;
+        } else {
+            activeSrcH = decH;
+            activeSrcY = 0;
+        }
+    }
+
+    // Target frame dimensions: Height = 135 (fills 100% of display height, NO top/bottom black borders)
+    // We calculate width dynamically to preserve the exact aspect ratio of the cropped source.
+    const int dstH = 135;
+    const int dstW = (int)((float)dstH * ((float)decW / (float)activeSrcH));
+    const int drawX = (240 - dstW) / 2; // Center horizontally (Left/Right black pillars are expected/acceptable)
+
+    // Clear left and right pillar margins on canvas
+    if (drawX > 0) {
+        m_canvas.fillRect(0, 0, drawX, 135, TFT_BLACK);
+        m_canvas.fillRect(drawX + dstW, 0, 240 - (drawX + dstW), 135, TFT_BLACK);
+    }
+
+    // Fast 0.4ms LUT mapping from active area directly to the 135px height canvas
     fastUpscale(
         (const uint16_t*)m_decodeSprite.getBuffer(),
         decW,           // source stride
-        sampleW,        // width to sample
-        sampleH,        // height to sample
-        sampleY,        // Y offset in source
+        decW,           // width to sample
+        activeSrcH,     // height to sample
+        activeSrcY,     // Y offset in source
         (uint16_t*)m_canvas.getBuffer(),
         240,            // dst stride
         drawX,
