@@ -155,7 +155,13 @@ void FujiLiveViewStream::update() {
     }
 
     // Process all pending packets aggressively
-    while (m_client.available() > 0) {
+    while (true) {
+        if (!m_client.connected()) break;
+        int avail = m_client.available();
+        if (avail == 0 && m_state == StreamState::WAIT_HEADER) {
+            break; // Yield if no new frame is starting
+        }
+
         if (m_state == StreamState::WAIT_HEADER) {
             int n = m_client.read(m_headerBytes + m_headerBytesRead, 4 - m_headerBytesRead);
             if (n > 0) {
@@ -187,15 +193,25 @@ void FujiLiveViewStream::update() {
 
         if (m_state == StreamState::READ_PAYLOAD) {
             size_t remaining = m_expectedPayloadLen - m_payloadBytesRead;
-            while (remaining > 0 && m_client.available() > 0) {
-                int avail = m_client.available();
-                int toRead = std::min((size_t)avail, remaining);
-                int n = m_client.read(m_assembleBuffer.data() + m_payloadBytesRead, toRead);
-                if (n > 0) {
-                    m_payloadBytesRead += n;
-                    remaining -= n;
+            unsigned long startWait = millis();
+
+            while (remaining > 0) {
+                avail = m_client.available();
+                if (avail > 0) {
+                    int toRead = std::min((size_t)avail, remaining);
+                    int n = m_client.read(m_assembleBuffer.data() + m_payloadBytesRead, toRead);
+                    if (n > 0) {
+                        m_payloadBytesRead += n;
+                        remaining -= n;
+                        startWait = millis(); // Reset timeout on successful read
+                    } else {
+                        break;
+                    }
                 } else {
-                    break;
+                    if (millis() - startWait > 50) {
+                        break; // Timeout waiting for next packet segment, yield to main loop
+                    }
+                    delay(1); // Micro-yield to Wi-Fi stack to fill buffer
                 }
             }
 
@@ -275,35 +291,42 @@ bool FujiLiveViewStream::render(M5GFX& display, const String& expText) {
         0.25f, 0.25f
     );
 
-    // Step 2: Extract active 3:2 camera sensor region and remove any 4:3 letterbox padding
-    int activeSrcY = 0;
-    int activeSrcH = decH;
-
-    // When camera sends 4:3 stream (decH = 120), the 3:2 scene occupies central 106 rows (y = 7..112)
+    // Step 2: "Zoom to Fill" (Pan & Scan) - Extract exactly the 16:9 ratio active area to fill 240x135
+    // The camera image is decW x decH (e.g. 160x120 or 160x106).
+    // The LCD screen is 240x135 (Aspect Ratio: 1.777)
+    // To completely eliminate all black borders (top, bottom, left, right) while preserving aspect ratio,
+    // we must crop the source image to a 1.777 aspect ratio bounding box.
+    
+    // First, find the actual camera active picture bounds (removing 4:3 letterbox if present)
+    int rawActiveY = 0;
+    int rawActiveH = decH;
     if (decH >= 118) {
-        activeSrcH = (decW * 2) / 3; // 160 * 2 / 3 = 106
-        activeSrcY = (decH - activeSrcH) / 2; // (120 - 106) / 2 = 7
+        rawActiveH = (decW * 2) / 3; // e.g. 160 * (2/3) = 106
+        rawActiveY = (decH - rawActiveH) / 2; // e.g. (120 - 106) / 2 = 7
     }
 
-    // Target frame dimensions: Height = 135 (fills 100% of display, 0 top/bottom black borders!)
-    // 3:2 aspect width: 135 * 1.5 = 204
-    const int dstW = 204;
+    // Now, crop the active picture (160x106, AR 1.5) to the screen's aspect ratio (AR 1.777)
+    // Because the picture (1.5) is taller than the screen (1.777), we crop the top/bottom.
+    // sampleW = decW (160)
+    // sampleH = decW / 1.777 = 90
+    int sampleW = decW;
+    int sampleH = (decW * 135) / 240; // 160 * 135 / 240 = 90
+    int sampleY = rawActiveY + (rawActiveH - sampleH) / 2; // e.g. 7 + (106 - 90)/2 = 15
+    
+    // Target frame dimensions: Height = 135, Width = 240 (Fills 100% of display, NO black borders!)
+    const int dstW = 240;
     const int dstH = 135;
-    const int drawX = (240 - dstW) / 2; // 18px side pillar
+    const int drawX = 0; // Full screen, no side pillars!
 
-    // Clear left and right pillar margins on canvas
-    m_canvas.fillRect(0, 0, drawX, 135, TFT_BLACK);
-    m_canvas.fillRect(drawX + dstW, 0, 240 - (drawX + dstW), 135, TFT_BLACK);
-
-    // Fast 0.4ms LUT mapping from active area (activeSrcY..activeSrcY+activeSrcH) directly to 0..134
+    // Fast 0.4ms LUT mapping from sample window (sampleY..sampleY+sampleH) directly to 0..134 and 0..239
     fastUpscale(
         (const uint16_t*)m_decodeSprite.getBuffer(),
-        decW,
-        decW,
-        activeSrcH,
-        activeSrcY,
+        decW,           // source stride
+        sampleW,        // width to sample
+        sampleH,        // height to sample
+        sampleY,        // Y offset in source
         (uint16_t*)m_canvas.getBuffer(),
-        240,
+        240,            // dst stride
         drawX,
         dstW,
         dstH,
