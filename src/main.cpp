@@ -128,10 +128,7 @@ void showDashboard(bool show)
             lv_obj_clear_flag(g_paramContainer, LV_OBJ_FLAG_HIDDEN);
             if (g_statusLabel) lv_obj_add_flag(g_statusLabel, LV_OBJ_FLAG_HIDDEN);
             if (g_infoLabel) lv_obj_add_flag(g_infoLabel, LV_OBJ_FLAG_HIDDEN);
-            if (g_btnLabel) {
-                lv_obj_clear_flag(g_btnLabel, LV_OBJ_FLAG_HIDDEN);
-                lv_label_set_text(g_btnLabel, "[A] Adjust  |  [B] LiveView\nTilt device to select");
-            }
+            if (g_btnLabel) lv_obj_add_flag(g_btnLabel, LV_OBJ_FLAG_HIDDEN); // Remove bottom hint in dashboard
             updateParameterCards();
         } else {
             lv_obj_add_flag(g_paramContainer, LV_OBJ_FLAG_HIDDEN);
@@ -144,13 +141,13 @@ void showDashboard(bool show)
 void createParamCard(lv_obj_t* parent, const char* title, lv_obj_t*& outCard, lv_obj_t*& outValLabel)
 {
     outCard = lv_obj_create(parent);
-    lv_obj_set_size(outCard, 114, 40);
-    lv_obj_set_style_bg_color(outCard, lv_color_hex(0x101010), 0);
-    lv_obj_set_style_bg_opa(outCard, LV_OPA_70, 0);
-    lv_obj_set_style_border_color(outCard, lv_color_hex(0x444444), 0);
+    lv_obj_set_size(outCard, 114, 44);
+    lv_obj_set_style_bg_color(outCard, lv_color_hex(0x000000), 0);
+    lv_obj_set_style_bg_opa(outCard, LV_OPA_70, 0); // Matching top status bar semi-transparent dark glass
+    lv_obj_set_style_border_color(outCard, lv_color_hex(0x3186), 0);
     lv_obj_set_style_border_width(outCard, 1, 0);
     lv_obj_set_style_radius(outCard, 6, 0);
-    lv_obj_set_style_pad_all(outCard, 2, 0);
+    lv_obj_set_style_pad_all(outCard, 3, 0);
     lv_obj_clear_flag(outCard, LV_OBJ_FLAG_SCROLLABLE);
 
     lv_obj_t* titleLbl = lv_label_create(outCard);
@@ -297,10 +294,10 @@ void setup()
     lv_obj_set_width(g_infoLabel, 230);
     lv_obj_align(g_infoLabel, LV_ALIGN_CENTER, 0, -8);
 
-    // Parameter Dashboard Container (2x2 grid aligned to top to maximize space)
+    // Parameter Dashboard Container: Positioned below top status bar (y: 26..128)
     g_paramContainer = lv_obj_create(scr);
-    lv_obj_set_size(g_paramContainer, 236, 86);
-    lv_obj_align(g_paramContainer, LV_ALIGN_TOP_MID, 0, 4);
+    lv_obj_set_size(g_paramContainer, 236, 100);
+    lv_obj_align(g_paramContainer, LV_ALIGN_TOP_MID, 0, 26);
     lv_obj_set_style_bg_opa(g_paramContainer, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(g_paramContainer, 0, 0);
     lv_obj_set_style_pad_all(g_paramContainer, 0, 0);
@@ -316,12 +313,13 @@ void setup()
 
     // IMU Slider Overlay Container
     g_sliderContainer = lv_obj_create(scr);
-    lv_obj_set_size(g_sliderContainer, 236, 68);
-    lv_obj_align(g_sliderContainer, LV_ALIGN_BOTTOM_MID, 0, -2);
-    lv_obj_set_style_bg_color(g_sliderContainer, lv_color_hex(0x181818), 0);
+    lv_obj_set_size(g_sliderContainer, 236, 62);
+    lv_obj_align(g_sliderContainer, LV_ALIGN_BOTTOM_MID, 0, -4);
+    lv_obj_set_style_bg_color(g_sliderContainer, lv_color_hex(0x000000), 0);
+    lv_obj_set_style_bg_opa(g_sliderContainer, LV_OPA_80, 0);
     lv_obj_set_style_border_color(g_sliderContainer, lv_color_hex(0x00E5FF), 0);
     lv_obj_set_style_border_width(g_sliderContainer, 2, 0);
-    lv_obj_set_style_radius(g_sliderContainer, 8, 0);
+    lv_obj_set_style_radius(g_sliderContainer, 6, 0);
     lv_obj_set_style_pad_all(g_sliderContainer, 3, 0);
     lv_obj_clear_flag(g_sliderContainer, LV_OBJ_FLAG_SCROLLABLE);
 
