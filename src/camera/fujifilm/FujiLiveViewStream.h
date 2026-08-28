@@ -6,6 +6,8 @@
 #include <vector>
 #include <M5Unified.h>
 #include <esp_jpeg_dec.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
 
 class FujiLiveViewStream {
 public:
@@ -18,39 +20,44 @@ public:
 
     bool isRunning() const { return m_running; }
     bool isConnected() { return m_client.connected(); }
-    bool hasNewFrame() const { return m_hasNewFrame; }
-    void clearNewFrame() { m_hasNewFrame = false; }
+    bool hasNewFrame();
+    void clearNewFrame();
 
     // Render latest frame using esp_new_jpeg SIMD hardware decoder with transparent floating OSD
     bool render(M5GFX& display, const String& expText = "");
 
     float getFps() const { return m_currentFps; }
-    size_t getFrameSize() const { return m_frameBuffer.size(); }
+    size_t getFrameSize();
 
     void setMirror(bool mirror) { m_mirror = mirror; }
     bool isMirror() const { return m_mirror; }
 
 private:
-    enum class StreamState {
-        WAIT_HEADER,
-        READ_PAYLOAD
+    enum class ParseState {
+        SEEKING_SOI,
+        IN_FRAME
     };
 
     bool ensureDecoder();
+    void processStreamData(const uint8_t* data, size_t len);
+    static void rxTaskTrampoline(void* arg);
+    void rxTaskLoop();
 
     WiFiClient m_client;
     IPAddress m_cameraIp;
     uint16_t m_port = 55742;
-    bool m_running = false;
-    bool m_hasNewFrame = false;
+    volatile bool m_running = false;
+    volatile bool m_hasNewFrame = false;
     bool m_mirror = false;
 
-    // Asynchronous framed packet parser state
-    StreamState m_state = StreamState::WAIT_HEADER;
-    uint8_t m_headerBytes[4] = {0};
-    uint8_t m_headerBytesRead = 0;
-    size_t m_expectedPayloadLen = 0;
-    size_t m_payloadBytesRead = 0;
+    // FreeRTOS background task handle & mutex
+    TaskHandle_t m_rxTaskHandle = nullptr;
+    portMUX_TYPE m_frameMux = portMUX_INITIALIZER_UNLOCKED;
+
+    // Streaming MJPEG State Machine (SOI/EOI tracker)
+    ParseState m_parseState = ParseState::SEEKING_SOI;
+    uint8_t m_prevByte = 0;
+    size_t m_assembleLen = 0;
 
     // Buffers for assembly and frame storage
     std::vector<uint8_t> m_assembleBuffer;

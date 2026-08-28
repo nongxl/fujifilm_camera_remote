@@ -7,7 +7,7 @@
 
 FujiLiveViewStream::FujiLiveViewStream() 
     : m_canvas(&M5.Display) {
-    m_assembleBuffer.reserve(65536);
+    m_assembleBuffer.resize(MAX_FRAME_SIZE);
     m_frameBuffer.reserve(65536);
 }
 
@@ -25,6 +25,21 @@ FujiLiveViewStream::~FujiLiveViewStream() {
         m_canvas.deleteSprite();
         m_canvasInit = false;
     }
+}
+
+bool FujiLiveViewStream::hasNewFrame() {
+    return m_hasNewFrame;
+}
+
+void FujiLiveViewStream::clearNewFrame() {
+    m_hasNewFrame = false;
+}
+
+size_t FujiLiveViewStream::getFrameSize() {
+    portENTER_CRITICAL(&m_frameMux);
+    size_t sz = m_frameBuffer.size();
+    portEXIT_CRITICAL(&m_frameMux);
+    return sz;
 }
 
 bool FujiLiveViewStream::ensureDecoder() {
@@ -77,11 +92,9 @@ bool FujiLiveViewStream::start(const IPAddress& cameraIp, uint16_t port) {
     m_port = port;
     m_running = true;
     m_hasNewFrame = false;
-    m_state = StreamState::WAIT_HEADER;
-    m_headerBytesRead = 0;
-    m_payloadBytesRead = 0;
-    m_assembleBuffer.clear();
-    m_frameBuffer.clear();
+    m_parseState = ParseState::SEEKING_SOI;
+    m_prevByte = 0;
+    m_assembleLen = 0;
     m_lastFrameTime = millis();
     m_lastFpsCalcTime = millis();
     m_frameCounter = 0;
@@ -89,199 +102,191 @@ bool FujiLiveViewStream::start(const IPAddress& cameraIp, uint16_t port) {
 
     Serial.printf("[LiveView] Connecting to %s:%d...\n", m_cameraIp.toString().c_str(), m_port);
     if (!m_client.connect(m_cameraIp, m_port)) {
-        Serial.println("[LiveView] Initial connection failed, will retry in background.");
-        return false;
-    }
-    m_client.setNoDelay(true);
-    m_client.setTimeout(1);
+        Serial.println("[LiveView] Initial connection failed, will retry in background task.");
+    } else {
+        m_client.setNoDelay(true);
+        m_client.setTimeout(1);
 
-    int fd = m_client.fd();
-    if (fd >= 0) {
-        int nodelay = 1;
-        setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &nodelay, sizeof(nodelay));
-        int rcvbuf = 32768;
-        setsockopt(fd, SOL_SOCKET, SO_RCVBUF, &rcvbuf, sizeof(rcvbuf));
+        int fd = m_client.fd();
+        if (fd >= 0) {
+            int nodelay = 1;
+            setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &nodelay, sizeof(nodelay));
+            int rcvbuf = 32768;
+            setsockopt(fd, SOL_SOCKET, SO_RCVBUF, &rcvbuf, sizeof(rcvbuf));
+        }
+        Serial.println("[LiveView] Connected to MJPEG Stream!");
     }
 
     ensureDecoder();
-    Serial.println("[LiveView] Connected to MJPEG Stream!");
+
+    // Spawn dedicated FreeRTOS stream receiver task pinned to Core 0 (Network Core)
+    xTaskCreatePinnedToCore(
+        rxTaskTrampoline,
+        "LiveViewRx",
+        4096,
+        this,
+        5,
+        &m_rxTaskHandle,
+        0 // Core 0 alongside lwIP TCP stack
+    );
+
     return true;
 }
 
 void FujiLiveViewStream::stop() {
     m_running = false;
     m_hasNewFrame = false;
+
+    if (m_rxTaskHandle != nullptr) {
+        vTaskDelete(m_rxTaskHandle);
+        m_rxTaskHandle = nullptr;
+    }
+
     if (m_client.connected()) {
         m_client.stop();
     }
-    m_assembleBuffer.clear();
-    m_state = StreamState::WAIT_HEADER;
-    m_headerBytesRead = 0;
-    m_payloadBytesRead = 0;
+
+    m_parseState = ParseState::SEEKING_SOI;
+    m_prevByte = 0;
+    m_assembleLen = 0;
     Serial.println("[LiveView] Stream stopped.");
 }
 
-void FujiLiveViewStream::update() {
-    if (!m_running) return;
+void FujiLiveViewStream::rxTaskTrampoline(void* arg) {
+    auto* self = static_cast<FujiLiveViewStream*>(arg);
+    self->rxTaskLoop();
+    vTaskDelete(nullptr);
+}
 
-    // Stream Watchdog: Check for reconnect if stream is stalled
-    if (!m_client.connected()) {
-        if (millis() - m_lastFrameTime > STREAM_WATCHDOG_MS) {
-            Serial.println("[LiveView] Watchdog: Reconnecting stream socket...");
-            m_client.stop();
-            if (m_client.connect(m_cameraIp, m_port)) {
-                m_client.setNoDelay(true);
-                m_client.setTimeout(1);
-                int fd = m_client.fd();
-                if (fd >= 0) {
-                    int nodelay = 1;
-                    setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &nodelay, sizeof(nodelay));
-                    int rcvbuf = 32768;
-                    setsockopt(fd, SOL_SOCKET, SO_RCVBUF, &rcvbuf, sizeof(rcvbuf));
-                }
-                Serial.println("[LiveView] Reconnected to MJPEG Stream!");
+void FujiLiveViewStream::processStreamData(const uint8_t* data, size_t len) {
+    if (data == nullptr || len == 0) return;
+
+    for (size_t i = 0; i < len; ++i) {
+        const uint8_t b = data[i];
+        const bool isMarker = (m_prevByte == 0xFF);
+
+        if (m_parseState == ParseState::SEEKING_SOI) {
+            if (isMarker && b == 0xD8) {
+                // Detected Start of Image (SOI 0xFF 0xD8)
+                m_parseState = ParseState::IN_FRAME;
+                m_assembleLen = 0;
+                m_assembleBuffer[m_assembleLen++] = 0xFF;
+                m_assembleBuffer[m_assembleLen++] = 0xD8;
             }
-            m_lastFrameTime = millis();
-            m_state = StreamState::WAIT_HEADER;
-            m_headerBytesRead = 0;
-            m_payloadBytesRead = 0;
-        }
-        return;
-    }
-
-    int fd = m_client.fd();
-    if (fd < 0) return;
-
-    // Process all pending packets aggressively without artificial sleep delays
-    while (true) {
-        if (!m_client.connected()) break;
-
-        if (m_state == StreamState::WAIT_HEADER) {
-            int toRead = 4 - m_headerBytesRead;
-            int n = -1;
-            if (fd >= 0) {
-                n = recv(fd, m_headerBytes + m_headerBytesRead, toRead, MSG_DONTWAIT);
-            }
-            if (n <= 0) {
-                int avail = m_client.available();
-                if (avail > 0) {
-                    n = m_client.read(m_headerBytes + m_headerBytesRead, std::min(avail, toRead));
-                }
+        } else {
+            // Accumulating frame payload
+            if (m_assembleLen < MAX_FRAME_SIZE) {
+                m_assembleBuffer[m_assembleLen++] = b;
             }
 
-            if (n <= 0) {
-                break; // No new packet header ready right now
-            }
-            m_headerBytesRead += n;
-
-            if (m_headerBytesRead == 4) {
-                uint32_t totalLen = 0;
-                memcpy(&totalLen, m_headerBytes, 4);
-
-                if (totalLen < 18 || totalLen > MAX_FRAME_SIZE) {
-                    // Desync recovery: slide 1 byte
-                    m_headerBytes[0] = m_headerBytes[1];
-                    m_headerBytes[1] = m_headerBytes[2];
-                    m_headerBytes[2] = m_headerBytes[3];
-                    m_headerBytesRead = 3;
-                    continue;
-                }
-
-                m_expectedPayloadLen = totalLen - 4;
-                if (m_assembleBuffer.size() < m_expectedPayloadLen) {
-                    m_assembleBuffer.resize(m_expectedPayloadLen);
-                }
-                m_payloadBytesRead = 0;
-                m_headerBytesRead = 0;
-                m_state = StreamState::READ_PAYLOAD;
-            }
-        }
-
-        if (m_state == StreamState::READ_PAYLOAD) {
-            size_t remaining = m_expectedPayloadLen - m_payloadBytesRead;
-            if (remaining > 0) {
-                int n = -1;
-                if (fd >= 0) {
-                    n = recv(fd, m_assembleBuffer.data() + m_payloadBytesRead, remaining, MSG_DONTWAIT);
-                }
-                if (n <= 0) {
-                    int avail = m_client.available();
-                    if (avail > 0) {
-                        int toRead = std::min((size_t)avail, remaining);
-                        n = m_client.read(m_assembleBuffer.data() + m_payloadBytesRead, toRead);
-                    }
-                }
-
-                if (n > 0) {
-                    m_payloadBytesRead += n;
-                    remaining -= n;
-                } else {
-                    break; // Yield immediately to loop() without any delay!
-                }
-            }
-
-            if (m_payloadBytesRead >= m_expectedPayloadLen) {
-                // Completed one full packet! Find exact JPEG SOI marker (0xFF 0xD8)
-                size_t soiPos = 0;
-                bool foundSoi = false;
-                for (size_t i = 0; i + 1 < m_expectedPayloadLen && i < 64; ++i) {
-                    if (m_assembleBuffer[i] == 0xFF && m_assembleBuffer[i+1] == 0xD8) {
-                        soiPos = i;
-                        foundSoi = true;
-                        break;
-                    }
-                }
-
-                if (foundSoi && m_expectedPayloadLen > soiPos + 100) {
-                    m_frameBuffer.assign(
-                        m_assembleBuffer.begin() + soiPos,
-                        m_assembleBuffer.begin() + m_expectedPayloadLen
-                    );
+            if (isMarker && b == 0xD9) {
+                // Detected End of Image (EOI 0xFF 0xD9)
+                if (m_assembleLen > 256) {
+                    portENTER_CRITICAL(&m_frameMux);
+                    m_frameBuffer.assign(m_assembleBuffer.begin(), m_assembleBuffer.begin() + m_assembleLen);
                     m_hasNewFrame = true;
+                    portEXIT_CRITICAL(&m_frameMux);
+
                     m_lastFrameTime = millis();
                     m_frameCounter++;
-
-                    if (millis() - m_lastFpsCalcTime >= 1000) {
-                        m_currentFps = (float)m_frameCounter * 1000.0f / (float)(millis() - m_lastFpsCalcTime);
+                    unsigned long now = millis();
+                    if (now - m_lastFpsCalcTime >= 1000) {
+                        m_currentFps = (float)m_frameCounter * 1000.0f / (float)(now - m_lastFpsCalcTime);
                         m_frameCounter = 0;
-                        m_lastFpsCalcTime = millis();
+                        m_lastFpsCalcTime = now;
                     }
                 }
-                m_state = StreamState::WAIT_HEADER;
-                m_headerBytesRead = 0;
-                m_payloadBytesRead = 0;
-                break; // Return immediately to render newly arrived frame!
+                m_parseState = ParseState::SEEKING_SOI;
             }
+        }
+        m_prevByte = b;
+    }
+}
+
+void FujiLiveViewStream::rxTaskLoop() {
+    uint8_t rxBuffer[8192];
+
+    while (m_running) {
+        if (!m_client.connected()) {
+            if (millis() - m_lastFrameTime > STREAM_WATCHDOG_MS) {
+                Serial.println("[LiveView Task] Watchdog reconnecting socket...");
+                m_client.stop();
+                if (m_client.connect(m_cameraIp, m_port)) {
+                    m_client.setNoDelay(true);
+                    m_client.setTimeout(1);
+                    int fd = m_client.fd();
+                    if (fd >= 0) {
+                        int nodelay = 1;
+                        setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &nodelay, sizeof(nodelay));
+                        int rcvbuf = 32768;
+                        setsockopt(fd, SOL_SOCKET, SO_RCVBUF, &rcvbuf, sizeof(rcvbuf));
+                    }
+                    Serial.println("[LiveView Task] Reconnected!");
+                }
+                m_lastFrameTime = millis();
+            }
+            vTaskDelay(pdMS_TO_TICKS(50));
+            continue;
+        }
+
+        int fd = m_client.fd();
+        int bytesRead = -1;
+        if (fd >= 0) {
+            bytesRead = recv(fd, rxBuffer, sizeof(rxBuffer), MSG_DONTWAIT);
+        }
+        if (bytesRead <= 0) {
+            int avail = m_client.available();
+            if (avail > 0) {
+                int toRead = std::min((int)sizeof(rxBuffer), avail);
+                bytesRead = m_client.read(rxBuffer, toRead);
+            }
+        }
+
+        if (bytesRead > 0) {
+            processStreamData(rxBuffer, static_cast<size_t>(bytesRead));
+        } else {
+            // Micro-yield to lwIP TCP stack when socket rx buffer is drained
+            vTaskDelay(1);
         }
     }
 }
 
+void FujiLiveViewStream::update() {
+    // Background receiver task runs autonomously on Core 0!
+}
+
 bool FujiLiveViewStream::render(M5GFX& display, const String& expText) {
-    if (m_frameBuffer.empty()) return false;
+    if (!m_hasNewFrame) return false;
     if (!ensureDecoder()) return false;
+
+    // Snapshot current frame in a thread-safe manner
+    std::vector<uint8_t> currentFrame;
+    portENTER_CRITICAL(&m_frameMux);
+    currentFrame = m_frameBuffer;
+    m_hasNewFrame = false;
+    portEXIT_CRITICAL(&m_frameMux);
+
+    if (currentFrame.empty()) return false;
 
     jpeg_dec_io_t io = {};
     jpeg_dec_header_info_t outInfo = {};
-    io.inbuf = m_frameBuffer.data();
-    io.inbuf_len = (int)m_frameBuffer.size();
+    io.inbuf = currentFrame.data();
+    io.inbuf_len = (int)currentFrame.size();
 
     jpeg_error_t rc = jpeg_dec_parse_header(m_jpeg, &io, &outInfo);
     if (rc != JPEG_ERR_OK) {
-        Serial.printf("[JPEG] Parse header failed: %d (bufLen=%d)\n", (int)rc, (int)m_frameBuffer.size());
         return false;
     }
 
     int outLength = 0;
     rc = jpeg_dec_get_outbuf_len(m_jpeg, &outLength);
     if (rc != JPEG_ERR_OK || outLength <= 0 || (size_t)outLength > m_jpegOutputCapacity) {
-        Serial.printf("[JPEG] Invalid outbuf len: %d (rc=%d, cap=%u)\n", outLength, (int)rc, (unsigned)m_jpegOutputCapacity);
         return false;
     }
 
     io.outbuf = m_jpegOutputBuffer;
     rc = jpeg_dec_process(m_jpeg, &io);
     if (rc != JPEG_ERR_OK) {
-        Serial.printf("[JPEG] Process failed: %d\n", (int)rc);
         return false;
     }
 
@@ -290,7 +295,6 @@ bool FujiLiveViewStream::render(M5GFX& display, const String& expText) {
     const int decH = outInfo.height > 0 ? outInfo.height : JPEG_DECODE_HEIGHT;
 
     // Center-crop 320x240 into 240x135 on double-buffering canvas
-    // Fills 100% of height and center-crops width cleanly
     const int visibleW = std::min(decW, 240); // 240
     const int visibleH = 135;
     const int cropX = (decW - visibleW) / 2; // (320 - 240) / 2 = 40
