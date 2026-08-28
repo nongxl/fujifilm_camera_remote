@@ -132,16 +132,16 @@ Modifying exposure parameters (ISO, Aperture, Shutter Speed, EV) requires two co
 ```
 
 *   **Scanning / Disconnected State**:
-    *   **Short Press [A]**: Scan for nearby Fujifilm camera Wi-Fi APs and connect automatically.
+    *   **Short Press [A]**: Scan for nearby Fujifilm camera Wi-Fi APs, auto-connect, and execute 7-step PTP handshake.
     *   **Short Press [B]**: Reset network and connection state.
-*   **Connected & Ready State (Parameter Dashboard)**:
-    *   **Short Press [A]**: **Trigger Shutter (Capture Photo)** 📸.
-    *   **Short Press [B]**: Enter **LiveView Viewfinder Mode** 📺.
-    *   **Long Press [B] (Hold 0.6s)**: Enter **IMU Motion Parameter Adjustment Mode**.
-*   **LiveView Viewfinder Mode**:
-    *   **Short Press [A]**: Trigger shutter directly while previewing 📸.
-    *   **Short Press [B]**: Return to Parameter Dashboard.
+*   **LiveView Viewfinder Mode (Default active screen upon connection)** 📺:
+    *   **Short Press [A]**: Trigger shutter directly while previewing (Capture Photo) 📸.
+    *   **Short Press [B]**: Switch to **Parameter Dashboard screen**.
     *   **Double Press [B]**: Toggle **Horizontal Mirror Flip** (Selfie Viewfinder mode).
+*   **Parameter Dashboard Screen (Dashboard)**:
+    *   **Short Press [A]**: **Trigger Shutter (Capture Photo)** 📸.
+    *   **Short Press [B]**: Return to **LiveView Viewfinder Mode** 📺.
+    *   **Long Press [B] (Hold 0.6s)**: Enter **IMU Motion Parameter Adjustment Mode**.
 *   **IMU Motion Adjustment Mode**:
     *   **Tilt Device Left / Right**: Smoothly increase or decrease the active parameter value.
     *   **Short Press [A]**: Confirm and apply setting to camera.
