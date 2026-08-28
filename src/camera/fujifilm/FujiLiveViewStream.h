@@ -3,7 +3,6 @@
 
 #include <Arduino.h>
 #include <WiFiClient.h>
-#include <vector>
 #include <M5Unified.h>
 #include <esp_jpeg_dec.h>
 #include <freertos/FreeRTOS.h>
@@ -59,9 +58,13 @@ private:
     uint8_t m_prevByte = 0;
     size_t m_assembleLen = 0;
 
-    // Buffers for assembly and frame storage
-    std::vector<uint8_t> m_assembleBuffer;
-    std::vector<uint8_t> m_frameBuffer;
+    // Zero-copy Ping-Pong DMA frame buffers
+    uint8_t* m_rxBuffer = nullptr;
+    uint8_t* m_frameBufferA = nullptr;
+    uint8_t* m_frameBufferB = nullptr;
+    uint8_t* m_assembleBufPtr = nullptr;
+    uint8_t* m_readyBufPtr = nullptr;
+    size_t m_readyLen = 0;
 
     // Hardware SIMD JPEG decoder handle and aligned DMA output buffer
     jpeg_dec_handle_t m_jpeg = nullptr;
@@ -77,6 +80,7 @@ private:
     uint32_t m_frameCounter = 0;
     float m_currentFps = 0.0f;
 
+    static constexpr size_t RX_BUFFER_SIZE = 8192;
     static constexpr size_t MAX_FRAME_SIZE = 131072; // 128KB max per JPEG frame
     static constexpr unsigned long STREAM_WATCHDOG_MS = 3000;
     static constexpr uint16_t JPEG_DECODE_WIDTH = 320;

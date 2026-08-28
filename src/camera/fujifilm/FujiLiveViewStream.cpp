@@ -7,8 +7,24 @@
 
 FujiLiveViewStream::FujiLiveViewStream() 
     : m_canvas(&M5.Display) {
-    m_assembleBuffer.resize(MAX_FRAME_SIZE);
-    m_frameBuffer.reserve(65536);
+    // Allocate network receive buffer and ping-pong frame buffers in heap
+    m_rxBuffer = (uint8_t*)heap_caps_malloc(RX_BUFFER_SIZE, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    if (!m_rxBuffer && psramFound()) {
+        m_rxBuffer = (uint8_t*)heap_caps_malloc(RX_BUFFER_SIZE, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    }
+
+    m_frameBufferA = (uint8_t*)heap_caps_malloc(MAX_FRAME_SIZE, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    if (!m_frameBufferA && psramFound()) {
+        m_frameBufferA = (uint8_t*)heap_caps_malloc(MAX_FRAME_SIZE, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    }
+
+    m_frameBufferB = (uint8_t*)heap_caps_malloc(MAX_FRAME_SIZE, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    if (!m_frameBufferB && psramFound()) {
+        m_frameBufferB = (uint8_t*)heap_caps_malloc(MAX_FRAME_SIZE, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    }
+
+    m_assembleBufPtr = m_frameBufferA;
+    m_readyBufPtr = m_frameBufferB;
 }
 
 FujiLiveViewStream::~FujiLiveViewStream() {
@@ -20,6 +36,18 @@ FujiLiveViewStream::~FujiLiveViewStream() {
     if (m_jpegOutputBuffer != nullptr) {
         free(m_jpegOutputBuffer);
         m_jpegOutputBuffer = nullptr;
+    }
+    if (m_rxBuffer != nullptr) {
+        free(m_rxBuffer);
+        m_rxBuffer = nullptr;
+    }
+    if (m_frameBufferA != nullptr) {
+        free(m_frameBufferA);
+        m_frameBufferA = nullptr;
+    }
+    if (m_frameBufferB != nullptr) {
+        free(m_frameBufferB);
+        m_frameBufferB = nullptr;
     }
     if (m_canvasInit) {
         m_canvas.deleteSprite();
@@ -37,7 +65,7 @@ void FujiLiveViewStream::clearNewFrame() {
 
 size_t FujiLiveViewStream::getFrameSize() {
     portENTER_CRITICAL(&m_frameMux);
-    size_t sz = m_frameBuffer.size();
+    size_t sz = m_readyLen;
     portEXIT_CRITICAL(&m_frameMux);
     return sz;
 }
@@ -95,6 +123,7 @@ bool FujiLiveViewStream::start(const IPAddress& cameraIp, uint16_t port) {
     m_parseState = ParseState::SEEKING_SOI;
     m_prevByte = 0;
     m_assembleLen = 0;
+    m_readyLen = 0;
     m_lastFrameTime = millis();
     m_lastFpsCalcTime = millis();
     m_frameCounter = 0;
@@ -119,11 +148,11 @@ bool FujiLiveViewStream::start(const IPAddress& cameraIp, uint16_t port) {
 
     ensureDecoder();
 
-    // Spawn dedicated FreeRTOS stream receiver task pinned to Core 0 (Network Core)
+    // Spawn dedicated FreeRTOS stream receiver task pinned to Core 0 with 8KB stack
     xTaskCreatePinnedToCore(
         rxTaskTrampoline,
         "LiveViewRx",
-        4096,
+        8192,
         this,
         5,
         &m_rxTaskHandle,
@@ -149,6 +178,7 @@ void FujiLiveViewStream::stop() {
     m_parseState = ParseState::SEEKING_SOI;
     m_prevByte = 0;
     m_assembleLen = 0;
+    m_readyLen = 0;
     Serial.println("[LiveView] Stream stopped.");
 }
 
@@ -159,7 +189,7 @@ void FujiLiveViewStream::rxTaskTrampoline(void* arg) {
 }
 
 void FujiLiveViewStream::processStreamData(const uint8_t* data, size_t len) {
-    if (data == nullptr || len == 0) return;
+    if (data == nullptr || len == 0 || !m_assembleBufPtr) return;
 
     for (size_t i = 0; i < len; ++i) {
         const uint8_t b = data[i];
@@ -170,20 +200,24 @@ void FujiLiveViewStream::processStreamData(const uint8_t* data, size_t len) {
                 // Detected Start of Image (SOI 0xFF 0xD8)
                 m_parseState = ParseState::IN_FRAME;
                 m_assembleLen = 0;
-                m_assembleBuffer[m_assembleLen++] = 0xFF;
-                m_assembleBuffer[m_assembleLen++] = 0xD8;
+                m_assembleBufPtr[m_assembleLen++] = 0xFF;
+                m_assembleBufPtr[m_assembleLen++] = 0xD8;
             }
         } else {
             // Accumulating frame payload
             if (m_assembleLen < MAX_FRAME_SIZE) {
-                m_assembleBuffer[m_assembleLen++] = b;
+                m_assembleBufPtr[m_assembleLen++] = b;
             }
 
             if (isMarker && b == 0xD9) {
                 // Detected End of Image (EOI 0xFF 0xD9)
                 if (m_assembleLen > 256) {
                     portENTER_CRITICAL(&m_frameMux);
-                    m_frameBuffer.assign(m_assembleBuffer.begin(), m_assembleBuffer.begin() + m_assembleLen);
+                    // Fast zero-copy pointer swap between assemble buffer and ready buffer
+                    uint8_t* temp = m_readyBufPtr;
+                    m_readyBufPtr = m_assembleBufPtr;
+                    m_assembleBufPtr = temp;
+                    m_readyLen = m_assembleLen;
                     m_hasNewFrame = true;
                     portEXIT_CRITICAL(&m_frameMux);
 
@@ -204,7 +238,7 @@ void FujiLiveViewStream::processStreamData(const uint8_t* data, size_t len) {
 }
 
 void FujiLiveViewStream::rxTaskLoop() {
-    uint8_t rxBuffer[8192];
+    if (!m_rxBuffer) return;
 
     while (m_running) {
         if (!m_client.connected()) {
@@ -232,18 +266,18 @@ void FujiLiveViewStream::rxTaskLoop() {
         int fd = m_client.fd();
         int bytesRead = -1;
         if (fd >= 0) {
-            bytesRead = recv(fd, rxBuffer, sizeof(rxBuffer), MSG_DONTWAIT);
+            bytesRead = recv(fd, m_rxBuffer, RX_BUFFER_SIZE, MSG_DONTWAIT);
         }
         if (bytesRead <= 0) {
             int avail = m_client.available();
             if (avail > 0) {
-                int toRead = std::min((int)sizeof(rxBuffer), avail);
-                bytesRead = m_client.read(rxBuffer, toRead);
+                int toRead = std::min((int)RX_BUFFER_SIZE, avail);
+                bytesRead = m_client.read(m_rxBuffer, toRead);
             }
         }
 
         if (bytesRead > 0) {
-            processStreamData(rxBuffer, static_cast<size_t>(bytesRead));
+            processStreamData(m_rxBuffer, static_cast<size_t>(bytesRead));
         } else {
             // Micro-yield to lwIP TCP stack when socket rx buffer is drained
             vTaskDelay(1);
@@ -256,22 +290,16 @@ void FujiLiveViewStream::update() {
 }
 
 bool FujiLiveViewStream::render(M5GFX& display, const String& expText) {
-    if (!m_hasNewFrame) return false;
+    if (!m_hasNewFrame || !m_readyBufPtr || m_readyLen == 0) return false;
     if (!ensureDecoder()) return false;
 
-    // Snapshot current frame in a thread-safe manner
-    std::vector<uint8_t> currentFrame;
-    portENTER_CRITICAL(&m_frameMux);
-    currentFrame = m_frameBuffer;
-    m_hasNewFrame = false;
-    portEXIT_CRITICAL(&m_frameMux);
-
-    if (currentFrame.empty()) return false;
-
+    // Direct hardware decoding from zero-copy ready frame buffer
     jpeg_dec_io_t io = {};
     jpeg_dec_header_info_t outInfo = {};
-    io.inbuf = currentFrame.data();
-    io.inbuf_len = (int)currentFrame.size();
+    io.inbuf = m_readyBufPtr;
+    io.inbuf_len = (int)m_readyLen;
+
+    m_hasNewFrame = false;
 
     jpeg_error_t rc = jpeg_dec_parse_header(m_jpeg, &io, &outInfo);
     if (rc != JPEG_ERR_OK) {
