@@ -247,6 +247,12 @@ void setup()
     M5.begin(cfg);
     M5.Display.setRotation(1); // Landscape mode (240x135)
     
+    // Boost ST7789 SPI bus write frequency to 80MHz for tear-free 3.2ms DMA pushes
+    auto panel = M5.Display.getPanel();
+    if (panel && panel->getBus()) {
+        panel->getBus()->setClock(80000000);
+    }
+    
     Serial.begin(115200);
     delay(300);
 
