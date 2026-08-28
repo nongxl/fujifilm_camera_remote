@@ -21,24 +21,6 @@ static lv_obj_t *g_statusLabel = nullptr;
 static lv_obj_t *g_infoLabel = nullptr;
 static lv_obj_t *g_btnLabel = nullptr;
 
-/* Parameter control UI elements */
-static lv_obj_t *g_paramContainer = nullptr;
-static lv_obj_t *g_isoCard = nullptr;
-static lv_obj_t *g_apertureCard = nullptr;
-static lv_obj_t *g_shutterCard = nullptr;
-static lv_obj_t *g_evCard = nullptr;
-
-static lv_obj_t *g_isoValLabel = nullptr;
-static lv_obj_t *g_apertureValLabel = nullptr;
-static lv_obj_t *g_shutterValLabel = nullptr;
-static lv_obj_t *g_evValLabel = nullptr;
-
-/* IMU Slider UI overlay elements */
-static lv_obj_t *g_sliderContainer = nullptr;
-static lv_obj_t *g_sliderTitleLabel = nullptr;
-static lv_obj_t *g_sliderValLabel = nullptr;
-static lv_obj_t *g_sliderBar = nullptr;
-
 enum class SelectedParam {
     ISO,
     APERTURE,
@@ -94,71 +76,6 @@ void updateUI(const String& status, const String& info, const String& btnHint)
     if (g_statusLabel) lv_label_set_text(g_statusLabel, status.c_str());
     if (g_infoLabel) lv_label_set_text(g_infoLabel, info.c_str());
     if (g_btnLabel) lv_label_set_text(g_btnLabel, btnHint.c_str());
-}
-
-void updateParameterCards()
-{
-    if (!g_paramContainer) return;
-
-    const auto& exp = g_camera.getExposureState();
-    if (g_isoValLabel) lv_label_set_text(g_isoValLabel, exp.iso.currentFormatted.c_str());
-    if (g_apertureValLabel) lv_label_set_text(g_apertureValLabel, exp.aperture.currentFormatted.c_str());
-    if (g_shutterValLabel) lv_label_set_text(g_shutterValLabel, exp.shutterSpeed.currentFormatted.c_str());
-    if (g_evValLabel) lv_label_set_text(g_evValLabel, exp.ev.currentFormatted.c_str());
-
-    // Highlight selected card with semi-transparent background
-    auto highlightCard = [](lv_obj_t* card, bool selected) {
-        if (!card) return;
-        lv_obj_set_style_border_color(card, selected ? lv_color_hex(0x00FF88) : lv_color_hex(0x444444), 0);
-        lv_obj_set_style_border_width(card, selected ? 2 : 1, 0);
-        lv_obj_set_style_bg_color(card, selected ? lv_color_hex(0x202020) : lv_color_hex(0x101010), 0);
-        lv_obj_set_style_bg_opa(card, selected ? LV_OPA_80 : LV_OPA_60, 0);
-    };
-
-    highlightCard(g_isoCard, g_selectedParam == SelectedParam::ISO);
-    highlightCard(g_apertureCard, g_selectedParam == SelectedParam::APERTURE);
-    highlightCard(g_shutterCard, g_selectedParam == SelectedParam::SHUTTER);
-    highlightCard(g_evCard, g_selectedParam == SelectedParam::EV);
-}
-
-void showDashboard(bool show)
-{
-    if (g_paramContainer) {
-        if (show) {
-            lv_obj_clear_flag(g_paramContainer, LV_OBJ_FLAG_HIDDEN);
-            if (g_statusLabel) lv_obj_add_flag(g_statusLabel, LV_OBJ_FLAG_HIDDEN);
-            if (g_infoLabel) lv_obj_add_flag(g_infoLabel, LV_OBJ_FLAG_HIDDEN);
-            if (g_btnLabel) lv_obj_add_flag(g_btnLabel, LV_OBJ_FLAG_HIDDEN); // Remove bottom hint in dashboard
-            updateParameterCards();
-        } else {
-            lv_obj_add_flag(g_paramContainer, LV_OBJ_FLAG_HIDDEN);
-            if (g_statusLabel) lv_obj_clear_flag(g_statusLabel, LV_OBJ_FLAG_HIDDEN);
-            if (g_infoLabel) lv_obj_clear_flag(g_infoLabel, LV_OBJ_FLAG_HIDDEN);
-        }
-    }
-}
-
-void createParamCard(lv_obj_t* parent, const char* title, lv_obj_t*& outCard, lv_obj_t*& outValLabel)
-{
-    outCard = lv_obj_create(parent);
-    lv_obj_set_size(outCard, 114, 44);
-    lv_obj_set_style_bg_color(outCard, lv_color_hex(0x000000), 0);
-    lv_obj_set_style_bg_opa(outCard, LV_OPA_70, 0); // Matching top status bar semi-transparent dark glass
-    lv_obj_set_style_border_color(outCard, lv_color_hex(0x3186), 0);
-    lv_obj_set_style_border_width(outCard, 1, 0);
-    lv_obj_set_style_radius(outCard, 6, 0);
-    lv_obj_set_style_pad_all(outCard, 3, 0);
-    lv_obj_clear_flag(outCard, LV_OBJ_FLAG_SCROLLABLE);
-
-    lv_obj_t* titleLbl = lv_label_create(outCard);
-    lv_label_set_text(titleLbl, title);
-    lv_obj_set_style_text_color(titleLbl, lv_color_hex(0x888888), 0);
-    lv_obj_align(titleLbl, LV_ALIGN_TOP_LEFT, 4, 1);
-
-    outValLabel = lv_label_create(outCard);
-    lv_label_set_text(outValLabel, "--");
-    lv_obj_set_style_text_color(outValLabel, lv_color_hex(0xFFFFFF), 0);
-    lv_obj_align(outValLabel, LV_ALIGN_BOTTOM_RIGHT, -4, -1);
 }
 
 static String g_sliderTitle = "TILT ADJUST";
@@ -502,7 +419,6 @@ void loop()
                 Serial.println("[App] PTP/IP Connected and Session Opened successfully!");
                 g_appState = AppState::CAMERA_READY;
                 g_inLiveViewMode = true;
-                showDashboard(false);
                 M5.Display.fillScreen(TFT_BLACK);
                 g_liveViewStream.start(g_cameraIP);
                 updateUI("LIVE VIEW", g_targetSSID, "[A] Shoot  |  [B] Dash\n[Dbl B] Mirror");
@@ -516,7 +432,7 @@ void loop()
         }
     }
 
-    if (!g_inLiveViewMode) {
+    if (g_appState != AppState::CAMERA_READY && g_appState != AppState::CAMERA_ADJUSTING_PARAM) {
         lv_timer_handler();
         delay(5);
     }

@@ -464,21 +464,21 @@ bool FujiLiveViewStream::render(M5GFX& display, const String& expText, const Liv
                 currentCanvas.drawRoundRect(cx, cy, cw, ch, 5, 0x3186);
             }
 
-            // Card title (left-aligned, pure crisp green)
+            // Card title (top-left aligned, pure crisp green)
             currentCanvas.setTextSize(1);
-            currentCanvas.setTextDatum(datum_t::middle_left);
+            currentCanvas.setTextDatum(datum_t::top_left);
             currentCanvas.setTextColor(0x00FF88);
-            currentCanvas.drawString(cards[i].title, cx + 8, cy + ch / 2);
+            currentCanvas.drawString(cards[i].title, cx + 6, cy + 4);
 
-            // Card value (right-aligned, enlarged bold text)
+            // Card value (bottom-right aligned, enlarged bold text)
             if (cards[i].val.length() > 5) {
                 currentCanvas.setTextSize(1);
             } else {
                 currentCanvas.setTextSize(2);
             }
-            currentCanvas.setTextDatum(datum_t::middle_right);
+            currentCanvas.setTextDatum(datum_t::bottom_right);
             currentCanvas.setTextColor(TFT_WHITE);
-            currentCanvas.drawString(cards[i].val.c_str(), cx + cw - 8, cy + ch / 2);
+            currentCanvas.drawString(cards[i].val.c_str(), cx + cw - 6, cy + ch - 3);
         }
         currentCanvas.setTextSize(1);
     }
