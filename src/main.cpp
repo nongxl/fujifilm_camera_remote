@@ -267,18 +267,18 @@ void loop()
 
                 Serial.printf("[UI] IMU Grid Nav -> Selected: %d (row=%d, col=%d)\n", (int)g_selectedParam, row, col);
             }
-        }
-    } else if (g_appState == AppState::CAMERA_ADJUSTING_PARAM) {
-        // IMU tilt step processing for parameter value
-        int stepDelta = g_imu.getStepDelta();
-        if (stepDelta != 0 && !g_currentAllowedValues.empty()) {
-            int newIdx = g_candidateIndex + stepDelta;
-            if (newIdx < 0) newIdx = 0;
-            if (newIdx >= (int)g_currentAllowedValues.size()) newIdx = (int)g_currentAllowedValues.size() - 1;
+        } else if (g_appState == AppState::CAMERA_ADJUSTING_PARAM) {
+            // IMU tilt step processing for parameter value (horizontal roll / pitch)
+            int stepDelta = g_imu.getStepDelta();
+            if (stepDelta != 0 && !g_currentAllowedValues.empty()) {
+                int newIdx = g_candidateIndex + stepDelta;
+                if (newIdx < 0) newIdx = 0;
+                if (newIdx >= (int)g_currentAllowedValues.size()) newIdx = (int)g_currentAllowedValues.size() - 1;
 
-            if (newIdx != g_candidateIndex) {
-                g_candidateIndex = newIdx;
-                Serial.printf("[IMU] Tilted step -> Index %d: %s\n", g_candidateIndex, g_currentAllowedFormatted[g_candidateIndex].c_str());
+                if (newIdx != g_candidateIndex) {
+                    g_candidateIndex = newIdx;
+                    Serial.printf("[IMU] Tilted step -> Index %d: %s\n", g_candidateIndex, g_currentAllowedFormatted[g_candidateIndex].c_str());
+                }
             }
         }
     }
