@@ -7,24 +7,6 @@
 
 FujiLiveViewStream::FujiLiveViewStream() 
     : m_canvas(&M5.Display) {
-    // Allocate network receive buffer and ping-pong frame buffers in heap
-    m_rxBuffer = (uint8_t*)heap_caps_malloc(RX_BUFFER_SIZE, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
-    if (!m_rxBuffer && psramFound()) {
-        m_rxBuffer = (uint8_t*)heap_caps_malloc(RX_BUFFER_SIZE, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    }
-
-    m_frameBufferA = (uint8_t*)heap_caps_malloc(MAX_FRAME_SIZE, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
-    if (!m_frameBufferA && psramFound()) {
-        m_frameBufferA = (uint8_t*)heap_caps_malloc(MAX_FRAME_SIZE, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    }
-
-    m_frameBufferB = (uint8_t*)heap_caps_malloc(MAX_FRAME_SIZE, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
-    if (!m_frameBufferB && psramFound()) {
-        m_frameBufferB = (uint8_t*)heap_caps_malloc(MAX_FRAME_SIZE, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    }
-
-    m_assembleBufPtr = m_frameBufferA;
-    m_readyBufPtr = m_frameBufferB;
 }
 
 FujiLiveViewStream::~FujiLiveViewStream() {
@@ -53,6 +35,38 @@ FujiLiveViewStream::~FujiLiveViewStream() {
         m_canvas.deleteSprite();
         m_canvasInit = false;
     }
+}
+
+bool FujiLiveViewStream::ensureBuffers() {
+    if (m_rxBuffer == nullptr) {
+        m_rxBuffer = (uint8_t*)heap_caps_malloc(RX_BUFFER_SIZE, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+        if (!m_rxBuffer && psramFound()) {
+            m_rxBuffer = (uint8_t*)heap_caps_malloc(RX_BUFFER_SIZE, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        }
+    }
+
+    if (m_frameBufferA == nullptr) {
+        m_frameBufferA = (uint8_t*)heap_caps_malloc(MAX_FRAME_SIZE, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+        if (!m_frameBufferA && psramFound()) {
+            m_frameBufferA = (uint8_t*)heap_caps_malloc(MAX_FRAME_SIZE, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        }
+    }
+
+    if (m_frameBufferB == nullptr) {
+        m_frameBufferB = (uint8_t*)heap_caps_malloc(MAX_FRAME_SIZE, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+        if (!m_frameBufferB && psramFound()) {
+            m_frameBufferB = (uint8_t*)heap_caps_malloc(MAX_FRAME_SIZE, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        }
+    }
+
+    m_assembleBufPtr = m_frameBufferA;
+    m_readyBufPtr = m_frameBufferB;
+
+    if (!m_rxBuffer || !m_frameBufferA || !m_frameBufferB) {
+        Serial.printf("[LiveView] Buffer allocation failed: rx=%p, A=%p, B=%p\n", m_rxBuffer, m_frameBufferA, m_frameBufferB);
+        return false;
+    }
+    return true;
 }
 
 bool FujiLiveViewStream::hasNewFrame() {
@@ -128,6 +142,11 @@ bool FujiLiveViewStream::start(const IPAddress& cameraIp, uint16_t port) {
     m_lastFpsCalcTime = millis();
     m_frameCounter = 0;
     m_currentFps = 0.0f;
+
+    if (!ensureBuffers()) {
+        Serial.println("[LiveView] Cannot start: buffer allocation failed");
+        return false;
+    }
 
     Serial.printf("[LiveView] Connecting to %s:%d...\n", m_cameraIp.toString().c_str(), m_port);
     if (!m_client.connect(m_cameraIp, m_port)) {

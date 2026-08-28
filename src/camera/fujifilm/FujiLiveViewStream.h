@@ -37,6 +37,7 @@ private:
         IN_FRAME
     };
 
+    bool ensureBuffers();
     bool ensureDecoder();
     void processStreamData(const uint8_t* data, size_t len);
     static void rxTaskTrampoline(void* arg);
@@ -81,7 +82,7 @@ private:
     float m_currentFps = 0.0f;
 
     static constexpr size_t RX_BUFFER_SIZE = 8192;
-    static constexpr size_t MAX_FRAME_SIZE = 131072; // 128KB max per JPEG frame
+    static constexpr size_t MAX_FRAME_SIZE = 65536; // 64KB max per JPEG frame (Fuji frames are ~18KB)
     static constexpr unsigned long STREAM_WATCHDOG_MS = 3000;
     static constexpr uint16_t JPEG_DECODE_WIDTH = 320;
     static constexpr uint16_t JPEG_DECODE_HEIGHT = 240;
