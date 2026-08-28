@@ -125,10 +125,16 @@ void showDashboard(bool show)
     if (g_paramContainer) {
         if (show) {
             lv_obj_clear_flag(g_paramContainer, LV_OBJ_FLAG_HIDDEN);
+            if (g_statusLabel) lv_obj_add_flag(g_statusLabel, LV_OBJ_FLAG_HIDDEN);
             if (g_infoLabel) lv_obj_add_flag(g_infoLabel, LV_OBJ_FLAG_HIDDEN);
+            if (g_btnLabel) {
+                lv_obj_clear_flag(g_btnLabel, LV_OBJ_FLAG_HIDDEN);
+                lv_label_set_text(g_btnLabel, "[A] Adjust  |  [B] Next\n[Hold B] LiveView");
+            }
             updateParameterCards();
         } else {
             lv_obj_add_flag(g_paramContainer, LV_OBJ_FLAG_HIDDEN);
+            if (g_statusLabel) lv_obj_clear_flag(g_statusLabel, LV_OBJ_FLAG_HIDDEN);
             if (g_infoLabel) lv_obj_clear_flag(g_infoLabel, LV_OBJ_FLAG_HIDDEN);
         }
     }
@@ -202,7 +208,8 @@ void enterAdjustMode()
     g_imu.reset();
     g_appState = AppState::CAMERA_ADJUSTING_PARAM;
 
-    // Show slider overlay
+    // Hide bottom standard buttons, show slider overlay
+    if (g_btnLabel) lv_obj_add_flag(g_btnLabel, LV_OBJ_FLAG_HIDDEN);
     if (g_sliderContainer) {
         lv_obj_clear_flag(g_sliderContainer, LV_OBJ_FLAG_HIDDEN);
         if (g_sliderTitleLabel) lv_label_set_text(g_sliderTitleLabel, title);
@@ -215,7 +222,6 @@ void enterAdjustMode()
         }
     }
 
-    updateUI("TILT ADJUST", "Tilt Remote to Adjust", "[A] Confirm Value\n[B] Cancel");
     Serial.printf("[UI] Entered IMU Adjust Mode for %s (Index=%d)\n", title, g_candidateIndex);
 }
 
@@ -232,8 +238,7 @@ void exitAdjustMode(bool applyChange)
     }
 
     g_appState = AppState::CAMERA_READY;
-    updateParameterCards();
-    updateUI("READY", g_targetSSID, "[A] Shoot  |  [B] LiveView\n[Hold B] Tilt Adjust");
+    showDashboard(true);
 }
 
 void setup()
@@ -271,7 +276,7 @@ void setup()
     lv_obj_t *scr = lv_screen_active();
     lv_obj_set_style_bg_color(scr, lv_color_hex(0x101010), 0);
 
-    // Title / Status
+    // Title / Status (Used for connecting/idle pages)
     g_statusLabel = lv_label_create(scr);
     lv_label_set_text(g_statusLabel, "FUJI REMOTE");
     lv_obj_set_style_text_color(g_statusLabel, lv_color_hex(0x00FF88), 0);
@@ -290,10 +295,10 @@ void setup()
     lv_obj_set_width(g_infoLabel, 230);
     lv_obj_align(g_infoLabel, LV_ALIGN_CENTER, 0, -8);
 
-    // Parameter Dashboard Container (2x2 grid)
+    // Parameter Dashboard Container (2x2 grid aligned to top to maximize space)
     g_paramContainer = lv_obj_create(scr);
-    lv_obj_set_size(g_paramContainer, 236, 88);
-    lv_obj_align(g_paramContainer, LV_ALIGN_CENTER, 0, 1);
+    lv_obj_set_size(g_paramContainer, 236, 86);
+    lv_obj_align(g_paramContainer, LV_ALIGN_TOP_MID, 0, 4);
     lv_obj_set_style_bg_opa(g_paramContainer, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(g_paramContainer, 0, 0);
     lv_obj_set_style_pad_all(g_paramContainer, 0, 0);
@@ -338,7 +343,7 @@ void setup()
 
     lv_obj_add_flag(g_sliderContainer, LV_OBJ_FLAG_HIDDEN); // Initially hidden
 
-    // Action Hint (2-line centered layout)
+    // Action Hint (Clean 2-line layout at bottom)
     g_btnLabel = lv_label_create(scr);
     if (g_savedProfile.valid && g_savedProfile.ssid.length() > 0) {
         lv_label_set_text(g_btnLabel, "[A] Fast Connect\n[Hold B 3s] Reset Pairing");
@@ -348,7 +353,7 @@ void setup()
     lv_obj_set_style_text_color(g_btnLabel, lv_color_hex(0x00E5FF), 0);
     lv_obj_set_style_text_align(g_btnLabel, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_set_width(g_btnLabel, 230);
-    lv_obj_align(g_btnLabel, LV_ALIGN_BOTTOM_MID, 0, -6);
+    lv_obj_align(g_btnLabel, LV_ALIGN_BOTTOM_MID, 0, -3);
 
     // Initialize Network Manager
     g_wifiManager.setStateCallback([](WifiState state, const String& info) {
@@ -380,9 +385,27 @@ void loop()
             }
         } else {
             updateParameterCards();
+
+            // IMU 2D Tilt Gesture: Up/Down/Left/Right grid navigation
+            int dx = 0, dy = 0;
+            if (g_imu.getGridNavDelta(dx, dy)) {
+                int row = (g_selectedParam == SelectedParam::SHUTTER || g_selectedParam == SelectedParam::EV) ? 1 : 0;
+                int col = (g_selectedParam == SelectedParam::APERTURE || g_selectedParam == SelectedParam::EV) ? 1 : 0;
+
+                if (dx != 0) col = (dx > 0) ? 1 : 0;
+                if (dy != 0) row = (dy > 0) ? 1 : 0;
+
+                if (row == 0 && col == 0) g_selectedParam = SelectedParam::ISO;
+                else if (row == 0 && col == 1) g_selectedParam = SelectedParam::APERTURE;
+                else if (row == 1 && col == 0) g_selectedParam = SelectedParam::SHUTTER;
+                else if (row == 1 && col == 1) g_selectedParam = SelectedParam::EV;
+
+                updateParameterCards();
+                Serial.printf("[UI] IMU Grid Nav -> Selected: %d (row=%d, col=%d)\n", (int)g_selectedParam, row, col);
+            }
         }
     } else if (g_appState == AppState::CAMERA_ADJUSTING_PARAM) {
-        // IMU tilt step processing
+        // IMU tilt step processing for parameter value
         int stepDelta = g_imu.getStepDelta();
         if (stepDelta != 0 && !g_currentAllowedValues.empty()) {
             int newIdx = g_candidateIndex + stepDelta;
@@ -428,16 +451,15 @@ void loop()
             updateUI("CONNECTING...", g_targetSSID, "Joining Wi-Fi...\n[B] Cancel");
             g_wifiManager.connectTo(g_targetSSID);
         } else if (g_appState == AppState::CAMERA_READY) {
-            // Short press A: Trigger Shutter
-            Serial.println("[UI] Triggering Shutter!");
-            if (!g_inLiveViewMode) {
-                updateUI("SHUTTER!", "Capturing photo...", "[A] Shoot\n[B] Mode");
-            }
-            bool ok = g_camera.triggerShutter();
-            Serial.printf("[Camera] Shutter result: %s\n", ok ? "SUCCESS" : "FAILED");
-            delay(150);
-            if (!g_inLiveViewMode) {
-                updateUI("READY", g_targetSSID, "[A] Shoot  |  [B] LiveView\n[Hold B] Tilt Adjust");
+            if (g_inLiveViewMode) {
+                // Short press A in LiveView: Trigger Shutter
+                Serial.println("[UI] Triggering Shutter from LiveView!");
+                bool ok = g_camera.triggerShutter();
+                Serial.printf("[Camera] Shutter result: %s\n", ok ? "SUCCESS" : "FAILED");
+            } else {
+                // Short press A in Dashboard: Enter Adjust Mode for highlighted card!
+                Serial.println("[UI] BtnA pressed: Entering adjust mode for selected param");
+                enterAdjustMode();
             }
         } else if (g_appState == AppState::CAMERA_ADJUSTING_PARAM) {
             // Short press A in adjust mode: Confirm and Set value
@@ -452,26 +474,32 @@ void loop()
         g_lastBtnBPressTime = now;
 
         if (g_appState == AppState::CAMERA_READY) {
-            if (isDoubleClick) {
-                // Double-click B: Toggle Selfie Mirror in LiveView
-                if (g_inLiveViewMode) {
+            if (g_inLiveViewMode) {
+                if (isDoubleClick) {
+                    // Double-click B in LiveView: Toggle Selfie Mirror
                     g_liveViewStream.setMirror(!g_liveViewStream.isMirror());
                     Serial.printf("[UI] LiveView Mirror: %d\n", g_liveViewStream.isMirror());
+                } else {
+                    // Single-click B in LiveView: Enter Dashboard menu
+                    g_inLiveViewMode = false;
+                    g_liveViewStream.stop();
+                    showDashboard(true);
+                    Serial.println("[UI] Entered Dashboard menu");
                 }
             } else {
-                // Single-click B: Toggle between LiveView and Dashboard!
-                g_inLiveViewMode = !g_inLiveViewMode;
-                if (g_inLiveViewMode) {
+                if (isDoubleClick) {
+                    // Double-click B in Dashboard: Return to LiveView
+                    g_inLiveViewMode = true;
                     showDashboard(false);
                     M5.Display.fillScreen(TFT_BLACK);
                     g_liveViewStream.start(g_cameraIP);
-                    updateUI("LIVE VIEW", g_targetSSID, "[A] Shoot  |  [B] Dash\n[Dbl B] Mirror");
+                    Serial.println("[UI] Returned to LiveView (Double-click)");
                 } else {
-                    g_liveViewStream.stop();
-                    showDashboard(true);
-                    updateUI("READY", g_targetSSID, "[A] Shoot  |  [B] LiveView\n[Hold B] Tilt Adjust");
+                    // Single-click B in Dashboard: Cycle parameter card selection!
+                    g_selectedParam = (SelectedParam)(((int)g_selectedParam + 1) % 4);
+                    updateParameterCards();
+                    Serial.printf("[UI] Cycled selected param to: %d\n", (int)g_selectedParam);
                 }
-                Serial.printf("[UI] Switched to %s mode\n", g_inLiveViewMode ? "LIVEVIEW" : "DASHBOARD");
             }
         } else if (g_appState == AppState::CAMERA_ADJUSTING_PARAM) {
             // Short press B in adjust mode: Cancel
@@ -501,11 +529,14 @@ void loop()
         delay(300);
     }
 
-    // Long press Button B in Dashboard (500ms): Enter IMU Tilt Adjust Mode
+    // Long press Button B in Dashboard (500ms): Return to LiveView
     if (M5.BtnB.pressedFor(500) && g_appState == AppState::CAMERA_READY && !g_inLiveViewMode) {
-        // Cycle selected parameter first or enter adjust
-        enterAdjustMode();
-        delay(200); // Debounce trigger
+        g_inLiveViewMode = true;
+        showDashboard(false);
+        M5.Display.fillScreen(TFT_BLACK);
+        g_liveViewStream.start(g_cameraIP);
+        Serial.println("[UI] Returned to LiveView (Long-press B)");
+        delay(300); // Debounce trigger
     }
 
     // State machine transitions

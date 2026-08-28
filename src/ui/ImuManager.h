@@ -102,8 +102,39 @@ public:
         return 0;
     }
 
+    // 2D Grid navigation delta: returns dx (-1 for left, +1 for right), dy (-1 for up, +1 for down)
+    bool getGridNavDelta(int& dx, int& dy) {
+        dx = 0;
+        dy = 0;
+        if (!M5.Imu.isEnabled()) return false;
+
+        float ax = 0, ay = 0, az = 0;
+        if (!M5.Imu.getAccel(&ax, &ay, &az)) return false;
+
+        // In Landscape mode on StickS3:
+        // ax is along horizontal width (tilt left/right)
+        // ay is along vertical height (tilt up/down)
+        constexpr float NAV_DEADZONE_G = 0.28f;
+
+        if (millis() - m_lastNavTime < 380) {
+            return false; // Debounce
+        }
+
+        if (fabsf(ax) > fabsf(ay) && fabsf(ax) > NAV_DEADZONE_G) {
+            dx = (ax < 0) ? 1 : -1; // ax < 0 tilts right, ax > 0 tilts left
+            m_lastNavTime = millis();
+            return true;
+        } else if (fabsf(ay) > NAV_DEADZONE_G) {
+            dy = (ay > 0) ? 1 : -1; // ay > 0 tilts down, ay < 0 tilts up
+            m_lastNavTime = millis();
+            return true;
+        }
+        return false;
+    }
+
     void reset() {
         m_lastStepTime = millis();
+        m_lastNavTime = millis();
         m_filteredTilt = 0.0f;
     }
 
@@ -112,6 +143,7 @@ private:
     static constexpr unsigned long ORIENTATION_STABLE_MS = 400; // 400ms debounce
     float m_filteredTilt = 0.0f;
     unsigned long m_lastStepTime = 0;
+    unsigned long m_lastNavTime = 0;
 
     DeviceOrientation m_stableOrientation = DeviceOrientation::LANDSCAPE;
     DeviceOrientation m_candidateOrientation = DeviceOrientation::LANDSCAPE;

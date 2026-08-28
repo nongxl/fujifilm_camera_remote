@@ -136,16 +136,17 @@ Modifying exposure parameters (ISO, Aperture, Shutter Speed, EV) requires two co
     *   **Short Press [B]**: Reset network and connection state.
 *   **LiveView Viewfinder Mode (Default active screen upon connection)** 📺:
     *   **Short Press [A]**: Trigger shutter directly while previewing (Capture Photo) 📸.
-    *   **Short Press [B]**: Switch to **Parameter Dashboard screen**.
+    *   **Short Press [B]**: Call up **Parameter Dashboard Menu** 🎛️.
     *   **Double Press [B]**: Toggle **Horizontal Mirror Flip** (Selfie Viewfinder mode).
-*   **Parameter Dashboard Screen (Dashboard)**:
-    *   **Short Press [A]**: **Trigger Shutter (Capture Photo)** 📸.
-    *   **Short Press [B]**: Return to **LiveView Viewfinder Mode** 📺.
-    *   **Long Press [B] (Hold 0.6s)**: Enter **IMU Motion Parameter Adjustment Mode**.
-*   **IMU Motion Adjustment Mode**:
-    *   **Tilt Device Left / Right**: Smoothly increase or decrease the active parameter value.
-    *   **Short Press [A]**: Confirm and apply setting to camera.
-    *   **Short Press [B]**: Cycle to next parameter (`ISO` -> `Aperture` -> `Shutter` -> `EV`).
+*   **Parameter Dashboard Menu Mode (Dashboard)** 🎛️:
+    *   **Short Press [B]**: Cycle through parameter cards (`ISO` -> `Aperture` -> `Shutter` -> `EV`).
+    *   **IMU Motion Tilt (Up/Down/Left/Right)**: Navigate across the 2×2 card grid via gravity gestures.
+    *   **Short Press [A]**: Enter **IMU Motion Slider Adjust Mode** for the highlighted card.
+    *   **Long Press [B] (Hold 0.5s) / Double Press [B]**: Close menu and return to **LiveView Viewfinder Mode** 📺.
+*   **IMU Motion Slider Adjust Mode**:
+    *   **Tilt Device Left / Right**: Smoothly and continuously step through candidate parameter values.
+    *   **Short Press [A]**: Confirm and apply new value to camera, returning to parameter menu.
+    *   **Short Press [B]**: Cancel change and return to parameter menu.
 
 ---
 
