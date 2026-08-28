@@ -357,14 +357,6 @@ void setup()
     g_wifiManager.begin();
 }
 
-static void drawOsdShadowText(M5GFX& display, const String& text, int x, int y, uint32_t color, datum_t datum) {
-    display.setTextDatum(datum);
-    display.setTextColor(TFT_BLACK);
-    display.drawString(text.c_str(), x + 1, y + 1); // 1px drop shadow for readability
-    display.setTextColor(color);
-    display.drawString(text.c_str(), x, y);
-}
-
 void loop()
 {
     M5.update();
@@ -375,41 +367,14 @@ void loop()
 
     if (g_appState == AppState::CAMERA_READY) {
         if (g_inLiveViewMode) {
-            // Render LiveView Frame strictly into video viewport y = 0..116 (height 117)
+            // Render LiveView Frame filling 100% full screen height (240x135) with floating OSD
             if (g_liveViewStream.hasNewFrame()) {
-                g_liveViewStream.render(M5.Display, 0, 0, 240, 117);
+                const auto& exp = g_camera.getExposureState();
+                String expText = "ISO " + exp.iso.currentFormatted + "  " + exp.aperture.currentFormatted + "  " + exp.shutterSpeed.currentFormatted;
+                if (g_liveViewStream.isMirror()) expText += " [M]";
+
+                g_liveViewStream.render(M5.Display, expText);
                 g_liveViewStream.clearNewFrame();
-            }
-
-            // Draw dedicated bottom HUD bar at y = 117..134 (height 18) with caching to eliminate flicker
-            static unsigned long s_lastHudUpdate = 0;
-            static String s_lastHudExp = "";
-            static int s_lastFpsInt = -1;
-
-            const auto& exp = g_camera.getExposureState();
-            String expText = "ISO " + exp.iso.currentFormatted + "  " + exp.aperture.currentFormatted + "  " + exp.shutterSpeed.currentFormatted;
-            if (g_liveViewStream.isMirror()) expText += " [M]";
-            int currentFpsInt = (int)(g_liveViewStream.getFps() + 0.5f);
-
-            if (expText != s_lastHudExp || currentFpsInt != s_lastFpsInt || millis() - s_lastHudUpdate >= 500) {
-                s_lastHudExp = expText;
-                s_lastFpsInt = currentFpsInt;
-                s_lastHudUpdate = millis();
-
-                // Draw solid background strip only in bottom HUD region
-                M5.Display.fillRect(0, 117, 240, 18, M5.Display.color565(14, 16, 22));
-
-                // Left: Exposure info
-                M5.Display.setTextDatum(datum_t::middle_left);
-                M5.Display.setTextColor(TFT_WHITE, M5.Display.color565(14, 16, 22));
-                M5.Display.drawString(expText.c_str(), 6, 126);
-
-                // Right: Live FPS counter
-                char fpsBuf[16];
-                snprintf(fpsBuf, sizeof(fpsBuf), "%d fps", currentFpsInt);
-                M5.Display.setTextDatum(datum_t::middle_right);
-                M5.Display.setTextColor(0x00FF88, M5.Display.color565(14, 16, 22));
-                M5.Display.drawString(fpsBuf, 234, 126);
             }
         } else {
             updateParameterCards();
@@ -605,7 +570,7 @@ void loop()
 
     if (!g_inLiveViewMode) {
         lv_timer_handler();
+        delay(5);
     }
-    delay(5);
 }
 

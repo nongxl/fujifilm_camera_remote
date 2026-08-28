@@ -20,8 +20,8 @@ public:
     bool hasNewFrame() const { return m_hasNewFrame; }
     void clearNewFrame() { m_hasNewFrame = false; }
 
-    // Render latest frame to display filling full height with auto centering
-    bool render(M5GFX& display, int x = 0, int y = 0, int w = 240, int h = 135);
+    // Render latest frame with full-height 135px and transparent floating OSD (Zero Flicker via Double-Buffered Canvas)
+    bool render(M5GFX& display, const String& expText = "");
 
     float getFps() const { return m_currentFps; }
     size_t getFrameSize() const { return m_frameBuffer.size(); }
@@ -52,6 +52,10 @@ private:
     // Buffers for assembly and frame storage
     std::vector<uint8_t> m_assembleBuffer;
     std::vector<uint8_t> m_frameBuffer;
+
+    // Hardware double-buffering canvas (64.8KB in internal DMA RAM)
+    LGFX_Sprite m_canvas;
+    bool m_canvasInit = false;
 
     unsigned long m_lastFrameTime = 0;
     unsigned long m_lastFpsCalcTime = 0;

@@ -29,13 +29,17 @@ static bool readJpegDimensions(const uint8_t* data, size_t len, int& outW, int& 
 }
 } // anonymous namespace
 
-FujiLiveViewStream::FujiLiveViewStream() {
+FujiLiveViewStream::FujiLiveViewStream() : m_canvas(&M5.Display) {
     m_assembleBuffer.reserve(65536);
     m_frameBuffer.reserve(65536);
 }
 
 FujiLiveViewStream::~FujiLiveViewStream() {
     stop();
+    if (m_canvasInit) {
+        m_canvas.deleteSprite();
+        m_canvasInit = false;
+    }
 }
 
 bool FujiLiveViewStream::start(const IPAddress& cameraIp, uint16_t port) {
@@ -171,8 +175,22 @@ void FujiLiveViewStream::update() {
     }
 }
 
-bool FujiLiveViewStream::render(M5GFX& display, int x, int y, int w, int h) {
+bool FujiLiveViewStream::render(M5GFX& display, const String& expText) {
     if (m_frameBuffer.empty()) return false;
+
+    // Ensure 240x135 internal DMA sprite canvas is initialized
+    if (!m_canvasInit) {
+        m_canvas.setPsram(false); // Internal RAM for high-speed DMA
+        m_canvas.setColorDepth(16);
+        void* ptr = m_canvas.createSprite(240, 135);
+        if (ptr == nullptr && psramFound()) {
+            m_canvas.setPsram(true);
+            m_canvas.createSprite(240, 135);
+        }
+        m_canvasInit = true;
+        m_canvas.setTextSize(1);
+        m_canvas.setTextWrap(false);
+    }
 
     // Detect actual JPEG resolution from camera
     int imgW = 0, imgH = 0;
@@ -182,26 +200,47 @@ bool FujiLiveViewStream::render(M5GFX& display, int x, int y, int w, int h) {
         imgH = 424;
     }
 
-    // Pure 1/4 integer hardware IDCT downscaling (scale = 0.25f)
-    // 640x424 -> 160x106
-    // Executes in 6ms (30+ FPS) via DMA, bypassing slow software affine resampler
-    const float scale = 0.25f;
-    int scaledW = imgW / 4;
-    int scaledH = imgH / 4;
-
-    // Center horizontally and vertically within the video viewport (x, y, w, h)
-    int drawX = x + (w - scaledW) / 2;
-    int drawY = y + (h - scaledH) / 2;
+    // Full screen height scaling: height fills 100% of display (135px, 0..134)
+    // 3:2 camera JPEG: 640x424 -> 204x135
+    float scale = 135.0f / (float)imgH;
+    int scaledW = (int)(imgW * scale);
+    int scaledH = 135;
+    int drawX = (240 - scaledW) / 2;
     if (drawX < 0) drawX = 0;
-    if (drawY < 0) drawY = 0;
 
-    // Direct fast IDCT decode and render
-    return display.drawJpg(
+    // Clear side pillar margins on canvas
+    m_canvas.fillScreen(TFT_BLACK);
+
+    // Draw full-height JPEG onto canvas
+    m_canvas.drawJpg(
         m_frameBuffer.data(),
         m_frameBuffer.size(),
-        drawX, drawY,
+        drawX, 0,
         scaledW, scaledH,
         0, 0,
         scale, scale
     );
+
+    // Draw floating transparent OSD with 1px drop shadow directly onto canvas
+    if (expText.length() > 0) {
+        // Bottom-Left: Exposure parameters
+        m_canvas.setTextDatum(datum_t::bottom_left);
+        m_canvas.setTextColor(TFT_BLACK);
+        m_canvas.drawString(expText.c_str(), 5, 133); // Shadow
+        m_canvas.setTextColor(TFT_WHITE);
+        m_canvas.drawString(expText.c_str(), 4, 132);
+    }
+
+    // Bottom-Right: FPS counter
+    char fpsBuf[16];
+    snprintf(fpsBuf, sizeof(fpsBuf), "%.0f fps", m_currentFps);
+    m_canvas.setTextDatum(datum_t::bottom_right);
+    m_canvas.setTextColor(TFT_BLACK);
+    m_canvas.drawString(fpsBuf, 237, 133); // Shadow
+    m_canvas.setTextColor(0x00FF88);
+    m_canvas.drawString(fpsBuf, 236, 132);
+
+    // Atomic 1-shot DMA push to physical LCD (Zero Flicker!)
+    m_canvas.pushSprite(&display, 0, 0);
+    return true;
 }
