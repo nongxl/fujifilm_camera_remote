@@ -112,7 +112,7 @@ bool FujiLiveViewStream::ensureDecoder() {
         }
     }
 
-    // Ensure 240x135 Ping-Pong canvases are initialized
+    // Ensure 240x135 Ping-Pong canvases are initialized in internal DMA SRAM
     if (!m_canvasInit) {
         m_canvasA.setPsram(false);
         m_canvasA.setColorDepth(16);
@@ -219,55 +219,6 @@ void FujiLiveViewStream::rxTaskTrampoline(void* arg) {
     auto* self = static_cast<FujiLiveViewStream*>(arg);
     self->rxTaskLoop();
     vTaskDelete(nullptr);
-}
-
-void FujiLiveViewStream::processStreamData(const uint8_t* data, size_t len) {
-    if (data == nullptr || len == 0 || !m_assembleBufPtr) return;
-
-    for (size_t i = 0; i < len; ++i) {
-        const uint8_t b = data[i];
-        const bool isMarker = (m_prevByte == 0xFF);
-
-        if (m_parseState == ParseState::SEEKING_SOI) {
-            if (isMarker && b == 0xD8) {
-                // Detected Start of Image (SOI 0xFF 0xD8)
-                m_parseState = ParseState::IN_FRAME;
-                m_assembleLen = 0;
-                m_assembleBufPtr[m_assembleLen++] = 0xFF;
-                m_assembleBufPtr[m_assembleLen++] = 0xD8;
-            }
-        } else {
-            // Accumulating frame payload
-            if (m_assembleLen < MAX_FRAME_SIZE) {
-                m_assembleBufPtr[m_assembleLen++] = b;
-            }
-
-            if (isMarker && b == 0xD9) {
-                // Detected End of Image (EOI 0xFF 0xD9)
-                if (m_assembleLen > 256) {
-                    portENTER_CRITICAL(&m_frameMux);
-                    // Fast zero-copy pointer swap between assemble buffer and ready buffer
-                    uint8_t* temp = m_readyBufPtr;
-                    m_readyBufPtr = m_assembleBufPtr;
-                    m_assembleBufPtr = temp;
-                    m_readyLen = m_assembleLen;
-                    m_hasNewFrame = true;
-                    portEXIT_CRITICAL(&m_frameMux);
-
-                    m_lastFrameTime = millis();
-                    m_frameCounter++;
-                    unsigned long now = millis();
-                    if (now - m_lastFpsCalcTime >= 1000) {
-                        m_currentFps = (float)m_frameCounter * 1000.0f / (float)(now - m_lastFpsCalcTime);
-                        m_frameCounter = 0;
-                        m_lastFpsCalcTime = now;
-                    }
-                }
-                m_parseState = ParseState::SEEKING_SOI;
-            }
-        }
-        m_prevByte = b;
-    }
 }
 
 void FujiLiveViewStream::rxTaskLoop() {
@@ -400,7 +351,7 @@ void FujiLiveViewStream::update() {
     // Background receiver task runs autonomously on Core 0!
 }
 
-bool FujiLiveViewStream::render(M5GFX& display, const String& expText) {
+bool FujiLiveViewStream::render(M5GFX& display, const String& expText, const LiveViewOverlay* overlay) {
     if (!m_hasNewFrame || !m_readyBufPtr || m_readyLen == 0) return false;
     if (!ensureDecoder()) return false;
 
@@ -463,7 +414,7 @@ bool FujiLiveViewStream::render(M5GFX& display, const String& expText) {
         }
     }
 
-    // Top semi-transparent glassmorphism OSD banner (height 18px, y: 2..20)
+    // 1. Top semi-transparent glassmorphism Status Bar (height 18px, y: 2..20)
     currentCanvas.fillRectAlpha(2, 2, 236, 18, 170, 0x0000); // 67% dark alpha glass
     currentCanvas.drawRoundRect(2, 2, 236, 18, 3, 0x3186);    // Subtle frosted border
 
@@ -480,6 +431,78 @@ bool FujiLiveViewStream::render(M5GFX& display, const String& expText) {
     currentCanvas.setTextDatum(datum_t::middle_right);
     currentCanvas.setTextColor(0x00FF88);
     currentCanvas.drawString(fpsBuf, 232, 11);
+
+    // 2. Render Semi-Transparent Menu Overlay (if opened)
+    if (overlay && overlay->showMenu && !overlay->showSlider) {
+        // Draw 4 parameter cards below top status bar (y: 25..129)
+        const struct {
+            const char* title;
+            String val;
+            int x, y;
+            bool selected;
+        } cards[4] = {
+            { "ISO",      overlay->isoVal,   4, 25, overlay->selectedParam == 0 },
+            { "Aperture", overlay->aptVal, 124, 25, overlay->selectedParam == 1 },
+            { "Shutter",  overlay->shtVal,   4, 78, overlay->selectedParam == 2 },
+            { "EV",       overlay->evVal,  124, 78, overlay->selectedParam == 3 }
+        };
+
+        for (int i = 0; i < 4; ++i) {
+            int cx = cards[i].x;
+            int cy = cards[i].y;
+            int cw = 112;
+            int ch = 49;
+
+            if (cards[i].selected) {
+                // Highlighted card: Emerald tint glass with 2px neon green border
+                currentCanvas.fillRectAlpha(cx, cy, cw, ch, 200, 0x081808);
+                currentCanvas.drawRoundRect(cx, cy, cw, ch, 5, 0x00FF88);
+                currentCanvas.drawRoundRect(cx + 1, cy + 1, cw - 2, ch - 2, 4, 0x00FF88);
+            } else {
+                // Unselected card: Dark alpha glass with subtle gray border
+                currentCanvas.fillRectAlpha(cx, cy, cw, ch, 165, 0x0000);
+                currentCanvas.drawRoundRect(cx, cy, cw, ch, 5, 0x3186);
+            }
+
+            // Card title (top-left)
+            currentCanvas.setTextDatum(datum_t::top_left);
+            currentCanvas.setTextColor(cards[i].selected ? 0x00FF88 : 0x888888);
+            currentCanvas.drawString(cards[i].title, cx + 7, cy + 5);
+
+            // Card value (bottom-right)
+            currentCanvas.setTextDatum(datum_t::bottom_right);
+            currentCanvas.setTextColor(TFT_WHITE);
+            currentCanvas.drawString(cards[i].val.c_str(), cx + cw - 7, cy + ch - 5);
+        }
+    }
+
+    // 3. Render Slider Adjust Overlay (if in adjust mode)
+    if (overlay && overlay->showSlider) {
+        int sx = 4, sy = 68, sw = 232, sh = 62;
+        currentCanvas.fillRectAlpha(sx, sy, sw, sh, 210, 0x0000); // 82% dark alpha glass
+        currentCanvas.drawRoundRect(sx, sy, sw, sh, 6, 0x00E5FF); // Cyan border
+        currentCanvas.drawRoundRect(sx + 1, sy + 1, sw - 2, sh - 2, 5, 0x00E5FF);
+
+        // Title (Center Top)
+        currentCanvas.setTextDatum(datum_t::top_center);
+        currentCanvas.setTextColor(0x00E5FF);
+        currentCanvas.drawString(overlay->sliderTitle.c_str(), 120, sy + 6);
+
+        // Value (Center Middle)
+        currentCanvas.setTextDatum(datum_t::middle_center);
+        currentCanvas.setTextColor(TFT_WHITE);
+        currentCanvas.drawString(("<  " + overlay->sliderVal + "  >").c_str(), 120, sy + 28);
+
+        // Track bar & Knob
+        int trackX = sx + 12, trackY = sy + 44, trackW = sw - 24, trackH = 6;
+        currentCanvas.fillRect(trackX, trackY, trackW, trackH, 0x3186);
+
+        if (overlay->sliderTotal > 1) {
+            int knobX = trackX + (trackW - 12) * overlay->sliderIndex / (overlay->sliderTotal - 1);
+            currentCanvas.fillRoundRect(knobX, trackY - 2, 12, 10, 3, 0x00E5FF);
+            currentCanvas.drawRoundRect(knobX, trackY - 2, 12, 10, 3, TFT_WHITE);
+        }
+    }
 
     // Push completed canvas to display using official LovyanGFX pipeline
     currentCanvas.pushSprite(&display, 0, 0);

@@ -161,6 +161,8 @@ void createParamCard(lv_obj_t* parent, const char* title, lv_obj_t*& outCard, lv
     lv_obj_align(outValLabel, LV_ALIGN_BOTTOM_RIGHT, -4, -1);
 }
 
+static String g_sliderTitle = "TILT ADJUST";
+
 void enterAdjustMode()
 {
     const auto& exp = g_camera.getExposureState();
@@ -204,22 +206,9 @@ void enterAdjustMode()
         }
     }
 
+    g_sliderTitle = title;
     g_imu.reset();
     g_appState = AppState::CAMERA_ADJUSTING_PARAM;
-
-    // Hide bottom standard buttons, show slider overlay
-    if (g_btnLabel) lv_obj_add_flag(g_btnLabel, LV_OBJ_FLAG_HIDDEN);
-    if (g_sliderContainer) {
-        lv_obj_clear_flag(g_sliderContainer, LV_OBJ_FLAG_HIDDEN);
-        if (g_sliderTitleLabel) lv_label_set_text(g_sliderTitleLabel, title);
-        if (g_sliderValLabel && g_candidateIndex < (int)g_currentAllowedFormatted.size()) {
-            lv_label_set_text(g_sliderValLabel, g_currentAllowedFormatted[g_candidateIndex].c_str());
-        }
-        if (g_sliderBar) {
-            lv_slider_set_range(g_sliderBar, 0, (int)g_currentAllowedValues.size() - 1);
-            lv_slider_set_value(g_sliderBar, g_candidateIndex, LV_ANIM_OFF);
-        }
-    }
 
     Serial.printf("[UI] Entered IMU Adjust Mode for %s (Index=%d)\n", title, g_candidateIndex);
 }
@@ -232,12 +221,7 @@ void exitAdjustMode(bool applyChange)
         g_camera.setPropertyValue(g_currentPropertyId, valToSet);
     }
 
-    if (g_sliderContainer) {
-        lv_obj_add_flag(g_sliderContainer, LV_OBJ_FLAG_HIDDEN);
-    }
-
     g_appState = AppState::CAMERA_READY;
-    showDashboard(true);
 }
 
 void setup()
@@ -258,7 +242,7 @@ void setup()
     g_savedProfile = StorageManager::getInstance().loadProfile();
     g_imu.begin();
 
-    // Initialize LVGL 9
+    // Initialize LVGL 9 (Used for Pairing / Connecting screens)
     lv_init();
     lv_tick_set_cb((lv_tick_get_cb_t)millis);
     
@@ -294,55 +278,6 @@ void setup()
     lv_obj_set_width(g_infoLabel, 230);
     lv_obj_align(g_infoLabel, LV_ALIGN_CENTER, 0, -8);
 
-    // Parameter Dashboard Container: Positioned below top status bar (y: 26..128)
-    g_paramContainer = lv_obj_create(scr);
-    lv_obj_set_size(g_paramContainer, 236, 100);
-    lv_obj_align(g_paramContainer, LV_ALIGN_TOP_MID, 0, 26);
-    lv_obj_set_style_bg_opa(g_paramContainer, LV_OPA_TRANSP, 0);
-    lv_obj_set_style_border_width(g_paramContainer, 0, 0);
-    lv_obj_set_style_pad_all(g_paramContainer, 0, 0);
-    lv_obj_set_flex_flow(g_paramContainer, LV_FLEX_FLOW_ROW_WRAP);
-    lv_obj_set_flex_align(g_paramContainer, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-
-    createParamCard(g_paramContainer, "ISO", g_isoCard, g_isoValLabel);
-    createParamCard(g_paramContainer, "Aperture", g_apertureCard, g_apertureValLabel);
-    createParamCard(g_paramContainer, "Shutter", g_shutterCard, g_shutterValLabel);
-    createParamCard(g_paramContainer, "EV", g_evCard, g_evValLabel);
-
-    showDashboard(false);
-
-    // IMU Slider Overlay Container
-    g_sliderContainer = lv_obj_create(scr);
-    lv_obj_set_size(g_sliderContainer, 236, 62);
-    lv_obj_align(g_sliderContainer, LV_ALIGN_BOTTOM_MID, 0, -4);
-    lv_obj_set_style_bg_color(g_sliderContainer, lv_color_hex(0x000000), 0);
-    lv_obj_set_style_bg_opa(g_sliderContainer, LV_OPA_80, 0);
-    lv_obj_set_style_border_color(g_sliderContainer, lv_color_hex(0x00E5FF), 0);
-    lv_obj_set_style_border_width(g_sliderContainer, 2, 0);
-    lv_obj_set_style_radius(g_sliderContainer, 6, 0);
-    lv_obj_set_style_pad_all(g_sliderContainer, 3, 0);
-    lv_obj_clear_flag(g_sliderContainer, LV_OBJ_FLAG_SCROLLABLE);
-
-    g_sliderTitleLabel = lv_label_create(g_sliderContainer);
-    lv_label_set_text(g_sliderTitleLabel, "TILT ADJUST");
-    lv_obj_set_style_text_color(g_sliderTitleLabel, lv_color_hex(0x00E5FF), 0);
-    lv_obj_align(g_sliderTitleLabel, LV_ALIGN_TOP_MID, 0, 1);
-
-    g_sliderValLabel = lv_label_create(g_sliderContainer);
-    lv_label_set_text(g_sliderValLabel, "--");
-    lv_obj_set_style_text_color(g_sliderValLabel, lv_color_hex(0xFFFFFF), 0);
-    lv_obj_align(g_sliderValLabel, LV_ALIGN_CENTER, 0, -1);
-
-    g_sliderBar = lv_slider_create(g_sliderContainer);
-    lv_obj_set_size(g_sliderBar, 210, 8);
-    lv_obj_align(g_sliderBar, LV_ALIGN_BOTTOM_MID, 0, -2);
-    lv_obj_set_style_bg_color(g_sliderBar, lv_color_hex(0x333333), LV_PART_MAIN);
-    lv_obj_set_style_bg_color(g_sliderBar, lv_color_hex(0x00E5FF), LV_PART_INDICATOR);
-    lv_obj_set_style_bg_color(g_sliderBar, lv_color_hex(0xFFFFFF), LV_PART_KNOB);
-    lv_obj_set_style_pad_all(g_sliderBar, 2, LV_PART_KNOB);
-
-    lv_obj_add_flag(g_sliderContainer, LV_OBJ_FLAG_HIDDEN); // Initially hidden
-
     // Action Hint (Clean 2-line layout at bottom)
     g_btnLabel = lv_label_create(scr);
     if (g_savedProfile.valid && g_savedProfile.ssid.length() > 0) {
@@ -372,20 +307,33 @@ void loop()
     g_imu.update();
     g_liveViewStream.update();
 
-    if (g_appState == AppState::CAMERA_READY) {
-        if (g_inLiveViewMode) {
-            // Render LiveView Frame filling 100% full screen height (240x135) with floating OSD
-            if (g_liveViewStream.hasNewFrame()) {
-                const auto& exp = g_camera.getExposureState();
-                String expText = "ISO " + exp.iso.currentFormatted + "  " + exp.aperture.currentFormatted + "  " + exp.shutterSpeed.currentFormatted;
-                if (g_liveViewStream.isMirror()) expText += " [M]";
+    if (g_appState == AppState::CAMERA_READY || g_appState == AppState::CAMERA_ADJUSTING_PARAM) {
+        if (g_liveViewStream.hasNewFrame()) {
+            const auto& exp = g_camera.getExposureState();
+            String expText = "ISO " + exp.iso.currentFormatted + "  " + exp.aperture.currentFormatted + "  " + exp.shutterSpeed.currentFormatted;
+            if (g_liveViewStream.isMirror()) expText += " [M]";
 
-                g_liveViewStream.render(M5.Display, expText);
-                g_liveViewStream.clearNewFrame();
+            LiveViewOverlay overlay;
+            overlay.showMenu = !g_inLiveViewMode;
+            overlay.selectedParam = (int)g_selectedParam;
+            overlay.isoVal = exp.iso.currentFormatted;
+            overlay.aptVal = exp.aperture.currentFormatted;
+            overlay.shtVal = exp.shutterSpeed.currentFormatted;
+            overlay.evVal = exp.ev.currentFormatted;
+
+            if (g_appState == AppState::CAMERA_ADJUSTING_PARAM) {
+                overlay.showSlider = true;
+                overlay.sliderTitle = g_sliderTitle;
+                overlay.sliderVal = (g_candidateIndex >= 0 && g_candidateIndex < (int)g_currentAllowedFormatted.size()) ? g_currentAllowedFormatted[g_candidateIndex] : "";
+                overlay.sliderIndex = g_candidateIndex;
+                overlay.sliderTotal = (int)g_currentAllowedValues.size();
             }
-        } else {
-            updateParameterCards();
 
+            g_liveViewStream.render(M5.Display, expText, &overlay);
+            g_liveViewStream.clearNewFrame();
+        }
+
+        if (!g_inLiveViewMode && g_appState == AppState::CAMERA_READY) {
             // IMU 2D Tilt Gesture: Up/Down/Left/Right grid navigation
             int dx = 0, dy = 0;
             if (g_imu.getGridNavDelta(dx, dy)) {
@@ -400,7 +348,6 @@ void loop()
                 else if (row == 1 && col == 0) g_selectedParam = SelectedParam::SHUTTER;
                 else if (row == 1 && col == 1) g_selectedParam = SelectedParam::EV;
 
-                updateParameterCards();
                 Serial.printf("[UI] IMU Grid Nav -> Selected: %d (row=%d, col=%d)\n", (int)g_selectedParam, row, col);
             }
         }
@@ -414,12 +361,6 @@ void loop()
 
             if (newIdx != g_candidateIndex) {
                 g_candidateIndex = newIdx;
-                if (g_sliderValLabel && g_candidateIndex < (int)g_currentAllowedFormatted.size()) {
-                    lv_label_set_text(g_sliderValLabel, g_currentAllowedFormatted[g_candidateIndex].c_str());
-                }
-                if (g_sliderBar) {
-                    lv_slider_set_value(g_sliderBar, g_candidateIndex, LV_ANIM_ON);
-                }
                 Serial.printf("[IMU] Tilted step -> Index %d: %s\n", g_candidateIndex, g_currentAllowedFormatted[g_candidateIndex].c_str());
             }
         }
@@ -432,7 +373,6 @@ void loop()
                 // NVS Fast Connect
                 g_targetSSID = g_savedProfile.ssid;
                 g_appState = AppState::CONNECTING_WIFI;
-                showDashboard(false);
                 updateUI("FAST CONNECT", g_targetSSID, "Connecting...\n[B] Cancel");
                 Serial.printf("[App] Fast connecting to %s (Ch:%d)...\n", g_targetSSID.c_str(), g_savedProfile.channel);
                 g_wifiManager.connectFast(g_savedProfile.ssid, g_savedProfile.channel, g_savedProfile.hasBssid ? g_savedProfile.bssid : nullptr);
@@ -440,14 +380,12 @@ void loop()
                 // Scan Wi-Fi
                 Serial.println("[UI] Starting WiFi scan...");
                 g_appState = AppState::SCANNING_WIFI;
-                showDashboard(false);
                 updateUI("SCANNING...", "Searching for Fuji AP", "Please wait...\n[B] Cancel");
                 g_wifiManager.startScan();
             }
         } else if (g_appState == AppState::WIFI_FOUND) {
             Serial.printf("[UI] Connecting to %s...\n", g_targetSSID.c_str());
             g_appState = AppState::CONNECTING_WIFI;
-            showDashboard(false);
             updateUI("CONNECTING...", g_targetSSID, "Joining Wi-Fi...\n[B] Cancel");
             g_wifiManager.connectTo(g_targetSSID);
         } else if (g_appState == AppState::CAMERA_READY) {
@@ -482,16 +420,11 @@ void loop()
                 } else {
                     // Single-click B in LiveView: Enter Dashboard menu
                     g_inLiveViewMode = false;
-                    g_liveViewStream.stop();
-                    showDashboard(true);
                     Serial.println("[UI] Entered Dashboard menu");
                 }
             } else {
                 // In Dashboard mode: Short press B directly exits menu and returns to LiveView!
                 g_inLiveViewMode = true;
-                showDashboard(false);
-                M5.Display.fillScreen(TFT_BLACK);
-                g_liveViewStream.start(g_cameraIP);
                 Serial.println("[UI] Returned to LiveView");
             }
         } else if (g_appState == AppState::CAMERA_ADJUSTING_PARAM) {
@@ -503,7 +436,6 @@ void loop()
             g_camera.disconnect();
             g_wifiManager.disconnect();
             g_liveViewStream.stop();
-            showDashboard(false);
             if (g_savedProfile.valid) {
                 updateUI("FUJI REMOTE", "Paired: " + g_savedProfile.ssid, "[A] Fast Connect\n[Hold B 3s] Reset Pairing");
             } else {

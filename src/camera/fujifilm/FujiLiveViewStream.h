@@ -8,6 +8,21 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 
+struct LiveViewOverlay {
+    bool showMenu = false;
+    int selectedParam = 0; // 0: ISO, 1: Aperture, 2: Shutter, 3: EV
+    String isoVal = "--";
+    String aptVal = "--";
+    String shtVal = "--";
+    String evVal = "--";
+
+    bool showSlider = false;
+    String sliderTitle = "";
+    String sliderVal = "";
+    int sliderIndex = 0;
+    int sliderTotal = 1;
+};
+
 class FujiLiveViewStream {
 public:
     FujiLiveViewStream();
@@ -22,8 +37,8 @@ public:
     bool hasNewFrame();
     void clearNewFrame();
 
-    // Render latest frame using esp_new_jpeg SIMD hardware decoder with transparent floating OSD
-    bool render(M5GFX& display, const String& expText = "");
+    // Render latest frame using esp_new_jpeg SIMD hardware decoder with transparent floating OSD & Menu
+    bool render(M5GFX& display, const String& expText = "", const LiveViewOverlay* overlay = nullptr);
 
     float getFps() const { return m_currentFps; }
     size_t getFrameSize();
