@@ -368,25 +368,28 @@ bool FujiLiveViewStream::render(M5GFX& display, const String& expText) {
         }
     }
 
-    // Draw floating transparent OSD with 1px drop shadow
+    // Draw sleek dark glassmorphism pill banner at bottom (height 17px, y: 116..133)
+    // to prevent pixel noise & blocky artifacts behind text
+    m_canvas.fillRoundRect(2, 116, 236, 17, 3, 0x1082); // Dark slate background
+    m_canvas.drawRoundRect(2, 116, 236, 17, 3, 0x2965); // Crisp subtle border
+
+    // Left: Exposure parameters in crisp white
     if (expText.length() > 0) {
-        m_canvas.setTextDatum(datum_t::bottom_left);
-        m_canvas.setTextColor(TFT_BLACK);
-        m_canvas.drawString(expText.c_str(), 5, 133); // Shadow
+        m_canvas.setTextDatum(datum_t::middle_left);
         m_canvas.setTextColor(TFT_WHITE);
-        m_canvas.drawString(expText.c_str(), 4, 132);
+        m_canvas.drawString(expText.c_str(), 8, 125);
     }
 
-    // Bottom-Right: FPS counter
+    // Right: FPS counter in high-visibility neon green
     char fpsBuf[16];
     snprintf(fpsBuf, sizeof(fpsBuf), "%.0f fps", m_currentFps);
-    m_canvas.setTextDatum(datum_t::bottom_right);
-    m_canvas.setTextColor(TFT_BLACK);
-    m_canvas.drawString(fpsBuf, 237, 133); // Shadow
+    m_canvas.setTextDatum(datum_t::middle_right);
     m_canvas.setTextColor(0x00FF88);
-    m_canvas.drawString(fpsBuf, 236, 132);
+    m_canvas.drawString(fpsBuf, 232, 125);
 
-    // Atomic 1-shot DMA push to physical LCD (Zero Flicker!)
+    // Atomic 1-shot burst push to physical LCD (Zero Tearing!)
+    display.startWrite();
     m_canvas.pushSprite(&display, 0, 0);
+    display.endWrite();
     return true;
 }
