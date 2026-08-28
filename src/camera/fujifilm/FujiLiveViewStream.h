@@ -53,7 +53,11 @@ private:
     std::vector<uint8_t> m_assembleBuffer;
     std::vector<uint8_t> m_frameBuffer;
 
-    // Hardware double-buffering canvas (64.8KB in internal DMA RAM)
+    // Fast 1/4 IDCT decode sprite (160x106, 33.9KB in SRAM)
+    LGFX_Sprite m_decodeSprite;
+    bool m_decodeSpriteInit = false;
+
+    // Final composition double-buffering canvas (240x135, 64.8KB in internal DMA SRAM)
     LGFX_Sprite m_canvas;
     bool m_canvasInit = false;
 
