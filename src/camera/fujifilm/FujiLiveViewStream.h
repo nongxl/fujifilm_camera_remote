@@ -20,7 +20,7 @@ public:
     bool hasNewFrame() const { return m_hasNewFrame; }
     void clearNewFrame() { m_hasNewFrame = false; }
 
-    // Render latest frame to display with auto centering & scaling
+    // Render latest frame to display filling full height with auto centering
     bool render(M5GFX& display, int x = 0, int y = 0, int w = 240, int h = 135);
 
     float getFps() const { return m_currentFps; }
@@ -30,7 +30,10 @@ public:
     bool isMirror() const { return m_mirror; }
 
 private:
-    void resetBuffer();
+    enum class StreamState {
+        WAIT_HEADER,
+        READ_PAYLOAD
+    };
 
     WiFiClient m_client;
     IPAddress m_cameraIp;
@@ -39,20 +42,24 @@ private:
     bool m_hasNewFrame = false;
     bool m_mirror = false;
 
-    // Buffer for assembling current incoming JPEG frame
+    // Asynchronous framed packet parser state
+    StreamState m_state = StreamState::WAIT_HEADER;
+    uint8_t m_headerBytes[4] = {0};
+    uint8_t m_headerBytesRead = 0;
+    size_t m_expectedPayloadLen = 0;
+    size_t m_payloadBytesRead = 0;
+
+    // Buffers for assembly and frame storage
     std::vector<uint8_t> m_assembleBuffer;
-    // Buffer storing latest completed JPEG frame
     std::vector<uint8_t> m_frameBuffer;
 
-    bool m_foundSOI = false;
     unsigned long m_lastFrameTime = 0;
     unsigned long m_lastFpsCalcTime = 0;
     uint32_t m_frameCounter = 0;
     float m_currentFps = 0.0f;
+
     static constexpr size_t MAX_FRAME_SIZE = 131072; // 128KB max per JPEG frame
     static constexpr unsigned long STREAM_WATCHDOG_MS = 3000;
-    static constexpr size_t CHUNK_SIZE = 8192;
-    uint8_t m_chunk[CHUNK_SIZE] = {0};
 };
 
 #endif // FUJI_LIVE_VIEW_STREAM_H

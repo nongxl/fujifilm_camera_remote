@@ -475,7 +475,7 @@ bool FujiCamera::adjustPropertyStep(ExposurePropertyId propId, int stepDelta) {
 }
 
 void FujiCamera::update() {
-    if (isConnected() && millis() - m_lastPropertySync > 5000) {
+    if (isConnected() && millis() - m_lastPropertySync > 10000) {
         m_lastPropertySync = millis();
         syncProperties();
     }
